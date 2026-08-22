@@ -63,6 +63,7 @@ L'harness opera categoricamente come **MODULO AUTONOMO (Standalone Metrology Sui
     │   ├── cdp_stats.py             # [MOD-06] Engine Statistico (Clopper-Pearson)
     │   └── claim_classifier.py      # [MOD-07] Decision Engine & Ruling Ipotesi
     ├── reporters/
+    │   ├── campaign_dashboard.py.   # [MOD-09] Generatore Dossier di Campagna e Matrice Decadimento T14
     │   └── sotu_master.py           # [MOD-08] Compilatore Scheda Master SOTU
     └── runs/                        # Storage Immutabile delle Prove Sperimentali
 ```
