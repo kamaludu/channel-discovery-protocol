@@ -153,9 +153,14 @@ def clopper_pearson_ci(k: int, n: int, alpha: float = 0.05) -> dict:
         "sample_size_n": n,
         "successes_k": k,
         "point_estimate": round(point_estimate, 4),
+        "point_estimate_ORR_b": round(point_estimate, 4),
         "confidence_level": 1.0 - alpha,
         "ci_lower": round(lower, 4),
         "ci_upper": round(upper, 4),
+        "confidence_interval_95_clopper_pearson": {
+            "lower": round(lower, 4),
+            "upper": round(upper, 4)
+        },
         "ci_formatted": f"[{lower:.4f}, {upper:.4f}]",
         "method": "Exact Binomial Clopper-Pearson (Beta Analytical/Bisection)"
     }
@@ -257,26 +262,31 @@ def a_priori_sample_size_r2(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CDP/SOP v2.3 Metrology Statistical Engine")
+    common_parser = argparse.ArgumentParser(add_help=False)
+    common_parser.add_argument("--out", default=None, help="Percorso file JSON di output")
+
+    parser = argparse.ArgumentParser(
+        description="CDP/SOP v2.3 Metrology Statistical Engine",
+        parents=[common_parser]
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p_binom = subparsers.add_parser("binomial", help="Intervallo Esatto Clopper-Pearson")
-    p_binom.add_argument("--k", type=int, required=True)
-    p_binom.add_argument("--n", type=int, required=True)
+    p_binom = subparsers.add_parser("binomial", parents=[common_parser], help="Intervallo Esatto Clopper-Pearson")
+    p_binom.add_argument("-k", "--k", type=int, required=True)
+    p_binom.add_argument("-n", "--n", type=int, required=True)
     p_binom.add_argument("--alpha", type=float, default=0.05)
 
-    p_ttft = subparsers.add_parser("paired-ttft", help="Analisi Appaiata TTFT (T12)")
+    p_ttft = subparsers.add_parser("paired-ttft", parents=[common_parser], help="Analisi Appaiata TTFT (T12)")
     p_ttft.add_argument("--pairs-json", type=str, required=True)
     p_ttft.add_argument("--mde", type=float, default=100.0)
     p_ttft.add_argument("--alpha", type=float, default=0.05)
     p_ttft.add_argument("--bootstrap-reps", type=int, default=10000)
 
-    p_power = subparsers.add_parser("power", help="Power Analysis Regime R2")
+    p_power = subparsers.add_parser("power", parents=[common_parser], help="Power Analysis Regime R2")
     p_power.add_argument("--mde", type=float, required=True)
     p_power.add_argument("--pilot-sd", type=float, required=True)
     p_power.add_argument("--power", type=float, default=0.80)
 
-    parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
     if args.command == "binomial":
@@ -300,4 +310,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+    
