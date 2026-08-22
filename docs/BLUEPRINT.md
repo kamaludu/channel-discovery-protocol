@@ -324,6 +324,19 @@ Calcolo di `N_calc` da MDE (`Delta_min`), `alpha = 0.05`, `1 - beta = 0.80` e st
 
 ---
 
+---
+
+### [MOD-09] `reporters/campaign_dashboard.py` — Generatore Dossier di Campagna & Matrice T14
+* **Linguaggio:** Python 3.10+ (Standard Library: `argparse`, `json`, `sys`, `pathlib`, `datetime`)
+* **Permessi:** `chmod 600`
+* **Scopo:** Scansionare ricorsivamente la cartella `runs/`, aggregare le metriche di tutte le sessioni storiche ed emettere un Dossier Markdown sinottico comparativo (Multi-SUT / Multi-Test).
+* **Funzionalità Specifiche:**
+  1. *Tabella Comparativa Globale:* Riepiloga Test ID, Provider, Model ID, Regime, `ORR_b`, `CI 95%`, Vettore $E$ e Verdetto per ogni run salvato.
+  2. *Matrice di Decadimento 2D per T14:* Costruisce la tabella bidimensionale $(L, D)$ con lunghezza contesto $L$ e profondità needle $D$.
+  3. *ASCII Heatmap:* Genera la visualizzazione grafica a barre di progresso in puro ASCII per il profilo di retrieval di ciascun SUT.
+
+---
+
 ## 5. SCHEMI JSON DEI CONTRATTI DATI
 
 ### 5.1 `run_manifest.json` (Provenance DAG & Session Metadata)
