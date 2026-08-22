@@ -221,3 +221,15 @@ La documentazione integrale del framework è consultabile nella cartella `docs/`
 ## 9. LICENZA E CONDIVISIONE
 
 Il progetto è rilasciato sotto licenza ** [GNU General Public License v3.0 (GPLv3)](LICENSE) o superiore, per garantire che rimanga **libero, aperto per sempre**:
+
+---
+
+### Uso di strumenti di Intelligenza Artificiale nello sviluppo
+
+CHANNEL DISCOVERY PROTOCOL è un'opera sviluppata dall'autore con un **uso esteso di strumenti di Intelligenza Artificiale generativa (LLM)** per progettazione, implementazione, analisi, debugging, revisione e documentazione.
+
+Gli LLM sono stati utilizzati come **strumenti di sviluppo**, non come generatori autonomi del progetto. L'autore ha definito l'architettura, i requisiti e le scelte progettuali, orchestrando il lavoro attraverso modelli e sessioni differenti e utilizzando gli stessi LLM anche per esaminare, mettere in discussione e criticare il lavoro prodotto da altri modelli.
+
+Il codice e la documentazione sono quindi il risultato di un **processo iterativo e supervisionato**, nel quale le proposte generate dagli LLM sono state valutate, confrontate, modificate o scartate dall'autore. Le decisioni finali e il risultato complessivo del progetto sono dell'autore.
+
+L'uso degli LLM offre significativi vantaggi in termini di produttività, analisi e revisione, ma introduce anche rischi: **nessun processo di verifica può garantire che ogni errore o omissione venga individuato**. Questa informativa intende rendere trasparente sia l'ampiezza dell'utilizzo degli LLM sia il loro ruolo effettivo nel processo di sviluppo.
