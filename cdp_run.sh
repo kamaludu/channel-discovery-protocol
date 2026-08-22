@@ -6,7 +6,7 @@
 # Component: Core Test Orchestrator & Execution Engine
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
-# Repository:
+# Repository: https://github.com/kamaludu/channel-discovery-protocol/
 # Contact: opensource@cevangel.anonaddy.me
 # ======================================
 # Requirements: bash (>=4.0), coreutils, util-linux, curl, jq, openssl, python (>=3.10 stdlib)
