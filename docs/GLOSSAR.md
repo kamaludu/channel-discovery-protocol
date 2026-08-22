@@ -1,5 +1,5 @@
 ## CHANNEL DISCOVERY PROTOCOL (CDP / SOP v2.3)
-# 📖 GLOSSARIO GENERALE DEFINITIVO E GUIDA INTERPRETATIVA ​
+# 📖 GLOSSARIO GENERALE E GUIDA INTERPRETATIVA ​
 ### *Standard di Laboratorio, Epistemologia Sperimentale e Metrologia dei Sistemi Black-Box*
 
 ---
