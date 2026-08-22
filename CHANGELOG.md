@@ -1,7 +1,7 @@
 # Changelog
 
 Tutte le modifiche rilevanti a questo progetto sono tracciate in questo file.
-Formato basato su [Keep a Changelog](https://keepachangelog.com/it/1.0.0/) e [Semantic Versioning](https://semver.org/).
+Formato basato su [Keep a Changelog](https://keepachangelog.com/) e [Semantic Versioning](https://semver.org/).
 
 ## [2.3.0] - 2026-08-22
 
