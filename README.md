@@ -216,4 +216,4 @@ La documentazione integrale del framework è consultabile nella cartella `docs/`
 
 ## 9. LICENZA E CONDIVISIONE
 
-Il progetto è rilasciato sotto licenza ** [GNU General Public License v3.0 (GPLv3)](LICENSE) per garantire che rimanga **libero, aperto e non privatizzabile per sempre**:
+Il progetto è rilasciato sotto licenza ** [GNU General Public License v3.0 (GPLv3)](LICENSE) o superiore, per garantire che rimanga **libero, aperto e non privatizzabile per sempre**:
