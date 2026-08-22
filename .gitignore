@@ -216,3 +216,21 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# CDP Harness Runs & Artifacts
+runs/
+tmp/
+raw_artifacts/
+ui_state/
+
+# Secrets, Keys & Logs
+*.key
+*.pem
+*.token
+.env
+*.log
+
+# System & Memory Crash Dumps
+core
+*.dump
+.DS_Store
