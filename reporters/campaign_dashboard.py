@@ -4,6 +4,7 @@
 # ==============================================================================
 # CDP/SOP v2.3 METROLOGY HARNESS — Campaign Dashboard & Decay Curve Generator
 # File: reporters/campaign_dashboard.py
+# Component: Generatore Dossier di Campagna & Matrice T14
 # Standard: CDP v2.3 (Sez. 4, 10) & SOP v2.3 (Sez. 5 T12, T14)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
