@@ -4,6 +4,7 @@
 # CDP/SOP v2.3 METROLOGY HARNESS
 # File: core/env_telemetry.sh
 # Component: Sonda Telemetrica Ambientale Termux
+# Standard: CDP v2.3 (Sez. 1, 4, 5) & SOP v2.3 (Sez. 1.3, 2.2, 3.1, 4.1)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
