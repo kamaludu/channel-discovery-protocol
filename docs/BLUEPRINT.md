@@ -105,6 +105,7 @@ L'harness opera interamente all'interno della sandbox protetta `~/cdp_workspace/
 │   ├── cdp_stats.py               # [MOD-06] Engine Statistico Preregistrato (Clopper-Pearson, t-test, Bootstrap)
 │   └── claim_classifier.py        # [MOD-07] Deterministic Claim Classification Engine (DAG)
 ├── reporters/
+│   ├── campaign_dashboard.py.     # [MOD-09] Generatore Dossier di Campagna e Matrice Decadimento T14
 │   └── sotu_master.py             # [MOD-08] Compilatore Scheda Master SOTU v2.3 (Quadruplet Rule)
 └── runs/                          # Storage Immutabile delle Sessioni Sperimentali
     └── RUN_<TIMESTAMP>_<NONCE>/
