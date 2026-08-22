@@ -43,7 +43,7 @@ Il protocollo elimina i salti inferenziali non giustificati subordinando ogni re
 
 ## 2. TOPOLOGIA SISTEMICA E STRUTTURA DEI MODULI
 
-L'harness opera categoricamente come **MODULO AUTONOMO (Standalone Metrology Suite)**, totalmente isolato dal System Under Test (SUT) e dai relativi adapter di invocazione locale (es. `bash4llm`).
+L'harness opera categoricamente come **MODULO AUTONOMO (Standalone Metrology Suite)**, totalmente isolato dal System Under Test (SUT) e dai relativi adapter di invocazione locale (es. `bash4llm`). [Bash4LLM](https://github.com/kamaludu/bash4llm)
 
 ### 2.1 Topologia del File System Raccomandata
 
