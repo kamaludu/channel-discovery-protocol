@@ -78,6 +78,7 @@ L'harness opera categoricamente come **MODULO AUTONOMO (Standalone Metrology Sui
 * **`[MOD-06] metrology/cdp_stats.py`**: Calcolo esatto non parametrico di Clopper-Pearson al 95% (su distribuzione Beta), t-test appaiato e Bootstrap non parametrico (10.000 iterazioni).
 * **`[MOD-07] metrology/claim_classifier.py`**: Motore logico deterministico (Decision DAG). Valuta la catena di custodia ed emette il verdetto logico senza alcun intervento di LLM.
 * **`[MOD-08] reporters/sotu_master.py`**: Compilatore automatico del verbale di laboratorio conforme alla Scheda Master SOTU v2.3.
+* **`[MOD-09] reporters/campaign_dashboard.py`**: Aggregatore multi-sessione. Genera il Dossier di Campagna globale e la matrice di decadimento $L \times D$ in puro ASCII per il Test T14.
 
 ---
 
@@ -97,6 +98,9 @@ chmod -R 700 ~/cdp_workspace/*.sh \
 
 # 4. Esecuzione Test Diagnostico di Latenza Appaiata (T12) con soglia MDE
 ./cdp_run.sh --test T12 --provider groq --regime pilot --mde 100.0
+
+# 5. Generazione Dossier di Campagna e Quadro Sinottico Globale
+./cdp.sh summary
 ```
 
 ---
