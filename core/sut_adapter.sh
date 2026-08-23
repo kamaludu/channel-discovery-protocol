@@ -198,7 +198,16 @@ if [ -n "$INTENDED_SHA256_EXPECTED" ] && [ "$STIMULUS_INTENDED_SHA256" != "$INTE
   INVALID_JSON="$(jq -c -n \
     --arg expected "$INTENDED_SHA256_EXPECTED" \
     --arg actual "$STIMULUS_INTENDED_SHA256" \
-    '{trial_classification:"INVALID_STIMULUS", error:"Stimulus hash mismatch pre-submit", expected_sha256:$expected, actual_sha256:$actual}')"
+    '{
+      trial_classification: "INVALID_STIMULUS",
+      error: "Stimulus hash mismatch pre-submit",
+      expected_sha256: $expected,
+      actual_sha256: $actual,
+      evaluation: {
+        output_provenance: "UNKNOWN",
+        trial_classification: "INVALID_STIMULUS"
+      }
+    }')"
   printf '%s\n' "$INVALID_JSON" > "$ARTIFACT_DIR/trial_metadata.json"
   exit 15
 fi
