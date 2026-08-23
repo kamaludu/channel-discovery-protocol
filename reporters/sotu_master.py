@@ -12,6 +12,22 @@
 # Contact: opensource@cevangel.anonaddy.me
 # ==============================================================================
 # Requirements: python (>=3.10), strictly standard library (zero-pip dependencies)
+#
+# ==============================================================================
+# GUIDA ARCHITETTURALE PER SVILUPPATORI (SUT Reporter Abstraction):
+# ==============================================================================
+# Questo modulo compila il referto formale SOTU v2.3 strutturato secondo la
+# "Quadruplet Rule" (Osservazione, Inferenza, Conclusione, Non Determinato).
+# 
+# Consuma esclusivamente i contratti dati JSON standardizzati:
+#   - run_manifest.json (Metadati di sessione ed evidenze di telemetria host)
+#   - claim_classification.json (Classificazione epistemica e vettore E)
+#   - metrics_summary.json (Stime Clopper-Pearson o Paired TTFT con CI 95%)
+#   - trial_metadata.json (DAG di provenienza ed audit trail del SUT)
+#
+# Nessun valore di provider, modello, endpoint, digest o intervallo e' cablato:
+# i campi non rilevati vengono rubricati come NOT_OBSERVED o UNRESOLVED.
+# ==============================================================================
 
 import argparse
 import json
@@ -162,7 +178,7 @@ class SotuMasterReporter:
         self.metrics = metrics or {}
         self.trial = trial_data or {}
 
-        self.test_id = self.manifest.get("test_id", self.classification.get("test_id", "T01"))
+        self.test_id = self.manifest.get("test_id", self.classification.get("test_id", "UNRESOLVED"))
         self.desc_info = TEST_DESCRIPTIONS.get(self.test_id, {
             "name": f"Test Unit {self.test_id}",
             "regime": "Caratterizzazione Sperimentale",
@@ -180,21 +196,21 @@ class SotuMasterReporter:
         audit_trail = self.manifest.get("audit_trail", {})
         timing_info = self.trial.get("timing", {})
 
-        provider = sut_tuple.get("provider", "groq")
-        model_id = sut_tuple.get("model_id", "llama-3.3-70b-versatile")
-        endpoint_url = sut_tuple.get("endpoint_url", "https://api.groq.com/openai/v1/chat/completions")
+        provider = sut_tuple.get("provider") or "UNRESOLVED"
+        model_id = sut_tuple.get("model_id") or "UNRESOLVED"
+        endpoint_url = sut_tuple.get("endpoint_url") or "NOT_OBSERVED"
         sampling = sut_tuple.get("sampling", {})
-        temp = sampling.get("temperature", 1.0)
-        max_tok = sampling.get("max_tokens", 4096)
+        temp = sampling.get("temperature", "NOT_OBSERVED")
+        max_tok = sampling.get("max_tokens", "NOT_OBSERVED")
 
-        device_mod = host_telem.get("device_model", "Android/Termux aarch64")
-        py_ver = host_telem.get("python_version", "3.11.x")
-        uax_ver = host_telem.get("unicodedata_version", "15.0.0")
-        curl_ver = host_telem.get("curl_version", "8.x")
-        active_locale = host_telem.get("active_locale", "C.UTF-8")
+        device_mod = host_telem.get("device_model", "NOT_OBSERVED")
+        py_ver = host_telem.get("python_version", "NOT_OBSERVED")
+        uax_ver = host_telem.get("unicodedata_version", "NOT_OBSERVED")
+        curl_ver = host_telem.get("curl_version", "NOT_OBSERVED")
+        active_locale = host_telem.get("active_locale", "NOT_OBSERVED")
         rtt_base = host_telem.get("rtt_baseline_ms", "null")
 
-        v3_class = audit_trail.get("v3_classification", "V3-3 (App-Layer Verified)")
+        v3_class = audit_trail.get("v3_classification", "V3-0a (No-Capture)")
         is_modalita_a = "V3-3" in v3_class
         modalita_op = "Modalita A (con V3 attivo)" if is_modalita_a else "Modalita B (Black-Box U -> O)"
         regime_metodologico = self.manifest.get("regime", "R1_PILOT")
@@ -231,7 +247,7 @@ class SotuMasterReporter:
         lines.append("")
 
         criterio_m = self.metrics.get("comparison_criterion", self.desc_info["criterion"])
-        vett_previsto = self.classification.get("final_evidence_vector", "E = < O3, C1, R1, S1 >")
+        vett_previsto = self.classification.get("final_evidence_vector", "NOT_OBSERVED")
 
         lines.append("2. PREREGISTRAZIONE E CONTROLLO CONFONDENTI (EXPERIMENTAL FREEZE)")
         lines.append(f"   - Criterio di Confronto M      : {criterio_m}")
@@ -249,15 +265,15 @@ class SotuMasterReporter:
         lines.append("")
 
         dag = self.manifest.get("provenance_dag", self.trial.get("provenance_dag", {}))
-        u_sha = dag.get("stimulus_intended_sha256", "dd4019696497ad7e1ca011fe83f57a7354edf66f62fd84f7eb03bbb49134c4e9")
-        u_buf_sha = dag.get("u_buffer_bytes_sha256", u_sha)
+        u_sha = dag.get("stimulus_intended_sha256") or "NOT_OBSERVED"
+        u_buf_sha = dag.get("u_buffer_bytes_sha256") or u_sha
 
         lines.append("4. CARATTERIZZAZIONE METROLOGICA DELL'INPUT (U_intended)")
         lines.append(f"   - Stimolo Target    : Registrato nel disegno sperimentale preregistrato")
         lines.append(f"   - Serializzazione   : Canonical UTF-8 Scalar Values (enc_UTF8)")
         lines.append(f"   - SHA-256 Intended  : {u_sha}")
         lines.append(f"   - SHA-256 Buffer    : {u_buf_sha}")
-        lines.append(f"   - Data Integrity    : {'CONFERMATA 1:1' if u_sha == u_buf_sha else 'DISALLINEAMENTO RILEVATO'}")
+        lines.append(f"   - Data Integrity    : {'CONFERMATA 1:1' if (u_sha != 'NOT_OBSERVED' and u_sha == u_buf_sha) else 'DISALLINEAMENTO O NON OSSERVATO'}")
         lines.append("")
 
         lines.append("5. DEFINIZIONE COMPARATIVA DEGLI STIMOLI (STRUCTURED LADDER OFAT)")
@@ -266,29 +282,32 @@ class SotuMasterReporter:
         lines.append(f"   - Parametrizzazione Canary: CSPRNG Nonce Dinamico Monouso Fresh")
         lines.append("")
 
-        req_sha = dag.get("c_req_app_bytes_sha256", "non_catturato")
-        req_u_sha = dag.get("c_req_unicode_sha256", "non_estratto")
-        resp_sha = dag.get("c_resp_app_bytes_sha256", "non_catturato")
-        out_sha = dag.get("output_parsed_sha256", "non_estratto")
-        req_id = audit_trail.get("req_id_extracted", self.trial.get("audit_trail", {}).get("req_id_extracted", "none"))
-        http_st = audit_trail.get("http_status", self.trial.get("audit_trail", {}).get("http_status", 200))
-        fin_r = audit_trail.get("finish_reason", self.trial.get("audit_trail", {}).get("finish_reason", "stop"))
+        req_sha = dag.get("c_req_app_bytes_sha256") or "NOT_OBSERVED"
+        req_u_sha = dag.get("c_req_unicode_sha256") or "NOT_OBSERVED"
+        resp_sha = dag.get("c_resp_app_bytes_sha256") or "NOT_OBSERVED"
+        out_sha = dag.get("output_parsed_sha256") or "NOT_OBSERVED"
+        req_id = audit_trail.get("req_id_extracted", self.trial.get("audit_trail", {}).get("req_id_extracted", "NOT_OBSERVED"))
+        http_st = audit_trail.get("http_status", self.trial.get("audit_trail", {}).get("http_status", "NOT_OBSERVED"))
+        fin_r = audit_trail.get("finish_reason", self.trial.get("audit_trail", {}).get("finish_reason", "NOT_OBSERVED"))
         ttft_ms = timing_info.get("ttft_observed_e2e_ms", "N/A")
 
-        orr_b = self.metrics.get("point_estimate_ORR_b", 1.0)
-        ci_block = self.metrics.get("confidence_interval_95_clopper_pearson", {})
-        ci_lower = ci_block.get("lower", 0.4782)
-        ci_upper = ci_block.get("upper", 1.0000)
+        orr_b_val = self.metrics.get("point_estimate_ORR_b")
+        orr_b_str = f"{orr_b_val:.4f}" if isinstance(orr_b_val, (int, float)) else "N/A"
 
-        ev_status = self.classification.get("final_evidence_status", "SUPPORTED")
-        id_status = self.classification.get("final_identification_status", "IDENTIFIED_WITHIN_OBSERVED_BOUNDARY")
-        final_vector = self.classification.get("final_evidence_vector", "E = < O3, C1, R1, S1 >")
+        ci_block = self.metrics.get("confidence_interval_95_clopper_pearson", {})
+        ci_lower = ci_block.get("lower")
+        ci_upper = ci_block.get("upper")
+        ci_str = f"[{ci_lower:.4f}, {ci_upper:.4f}]" if (ci_lower is not None and ci_upper is not None) else "N/A"
+
+        ev_status = self.classification.get("final_evidence_status", "NOT_OBSERVED")
+        id_status = self.classification.get("final_identification_status", "NOT_OBSERVED")
+        final_vector = self.classification.get("final_evidence_vector", "NOT_OBSERVED")
 
         lines.append("6. CATENA DI MISURA E DATI OSSERVATI (O -> M -> B -> H)")
         lines.append("")
         lines.append("   [O] RAW OBSERVATIONS:")
-        lines.append(f"   - U_buffer Integrity Check : VERIFIED (SHA-256: {u_buf_sha})")
-        lines.append(f"   - Request Transport Layer  : HTTP/2 POST via cURL 8.x (TLS Encrypted)")
+        lines.append(f"   - U_buffer Integrity Check : {'VERIFIED (SHA-256: ' + u_buf_sha + ')' if u_buf_sha != 'NOT_OBSERVED' else 'NOT_OBSERVED'}")
+        lines.append(f"   - Request Transport Layer  : SUT CLI Execution Bridge (TLS Socket)")
         lines.append(f"   - Correlation / Request ID : {req_id}")
         lines.append(f"   - C_req_unicode SHA-256    : {req_u_sha}")
         lines.append(f"   - C_req_app_bytes SHA-256  : {req_sha}")
@@ -304,12 +323,11 @@ class SotuMasterReporter:
             lines.append(f"   - Grandezza Stimata        : bar_D (Media delle differenze appaiate TTFT)")
             lines.append(f"   - Stima Puntuale           : bar_D = {bar_d} ms")
             lines.append(f"   - Incertezza (CI_95%)      : Paired Student-t {ci_lat}")
-            lines.append(f"   - Rilevanza Ingegneristica : Conforme a MDE (Delta_min >= 100 ms)")
+            lines.append(f"   - Rilevanza Ingegneristica : Valutata rispetto a MDE (Delta_min >= 100 ms)")
         else:
             lines.append(f"   - Grandezza Stimata        : Observed Replication Rate (ORR_b = k / N_valid)")
-            lines.append(f"   - Stima Puntuale           : ORR_b = {orr_b:.4f}")
-            lines.append(f"   - Incertezza (CI_95%)      : Clopper-Pearson [{ci_lower:.4f}, {ci_upper:.4f}]")
-            lines.append(f"   - Precisione Metrologica   : Valutazione pilota R1 (k={int(orr_b*5 if orr_b <= 1.0 else 5)}, N=5)")
+            lines.append(f"   - Stima Puntuale           : ORR_b = {orr_b_str}")
+            lines.append(f"   - Incertezza (CI_95%)      : Clopper-Pearson {ci_str}")
         lines.append("")
         lines.append("   [B] BEHAVIORAL INFERENCE:")
         lines.append(f"   - Relazione Input/Output   : U -> O sotto criterio {criterio_m}")
@@ -329,16 +347,16 @@ class SotuMasterReporter:
             lines.append(f"  e materializzato con digest SHA-256: {req_sha} (C_req_unicode SHA-256: {req_u_sha}).")
             lines.append(f"  La risposta del server C_resp (Request ID: {req_id}, HTTP Status: {http_st}) ha prodotto")
             lines.append(f"  un output estratto con SHA-256: {out_sha}.")
-            lines.append(f"  Il tasso di replicazione osservato e' ORR_b = {orr_b:.4f} (95% CI esatto: [{ci_lower:.4f}, {ci_upper:.4f}]).")
+            lines.append(f"  Il tasso di replicazione osservato e' ORR_b = {orr_b_str} (95% CI esatto: {ci_str}).")
         else:
             lines.append(f"  L'output terminale O e' stato acquisito in Modalita B (Black-box pura).")
-            lines.append(f"  Digest estratto SHA-256: {out_sha}. ORR_b = {orr_b:.4f}.")
+            lines.append(f"  Digest estratto SHA-256: {out_sha}. ORR_b = {orr_b_str}.")
         lines.append("")
         lines.append("- INFERENZA:")
         if is_modalita_a:
             lines.append(f"  I dati empirici attestano che il payload C_req_unicode corrisponde all'input")
             lines.append(f"  intenzionale U_intended. Sotto il criterio {criterio_m}, l'ipotesi di mutazione")
-            lines.append(f"  client-side pre-trasmissione (H1a) e' formalmente esclusa entro il confine osservato.")
+            lines.append(f"  client-side pre-trasmissione (H1a) e' valutata entro il confine osservato.")
             lines.append(f"  La computazione e' compatibile con la regolare elaborazione server-side.")
         else:
             lines.append(f"  La relazione comportamentale terminale U -> O risulta verificata sotto criterio {criterio_m}.")
@@ -349,7 +367,7 @@ class SotuMasterReporter:
         lines.append(f"  1. Evidence Status: {ev_status} (Vettore di Evidenza: {final_vector}).")
         lines.append(f"  2. Identification Status: {id_status}.")
         if is_modalita_a:
-            lines.append(f"  3. L'ipotesi H1a (Client Sanitization) e' DISCONFERMATA entro il modello strumentato.")
+            lines.append(f"  3. L'ipotesi H1a (Client Mutation) e' DISCONFERMATA entro il confine strumentato.")
             lines.append(f"  4. Le classi di ipotesi interne H2, H3, H4 e H5 rimangono UNDERDETERMINED (Proxy != Meccanismo).")
         else:
             lines.append(f"  3. Nessuna asserzione di localizzazione (Claim B) o meccanismo (Claim C) e' ammessa.")
@@ -362,15 +380,15 @@ class SotuMasterReporter:
         lines.append("")
 
         lines.append("8. ADDENDUM METODOLOGICO OBBLIGATORIO")
-        lines.append(f"- ASSUNZIONI STRUM.: Si assume che l'adapter bash4llm e cURL 8.x registrino con fedelta")
-        lines.append(f"  1:1 i byte materializzati sul descrittore di file prima della crittografia TLS del socket.")
+        lines.append(f"- ASSUNZIONI STRUM.: Si assume che l'adapter SUT registri con fedelta 1:1 i byte")
+        lines.append(f"  materializzati sul descrittore di file prima della crittografia TLS del socket.")
         lines.append(f"- CONDIZIONI DISCONF.: La conclusione verrebbe falsificata qualora venisse riscontrata")
         lines.append(f"  una mutazione di codepoint nel payload C_req_unicode rispetto allo stimolo U_intended,")
         lines.append(f"  oppure qualora una replica tra sessioni indipendenti fallisse sotto il criterio {criterio_m}.")
         lines.append("")
 
         max_boundary = "Layer V3-3 (Client/Transport Network Boundary)" if is_modalita_a else "Layer V2 (Terminal Behavioral Output)"
-        validation_verdict = "VALID" if "VALID" in self.classification.get("final_verdict", "VALID") else "VALID_BEHAVIORAL_ONLY"
+        validation_verdict = self.classification.get("final_verdict", "NOT_OBSERVED")
 
         lines.append("9. METRICHE FINALI E VETTORE DI EVIDENZA")
         lines.append(f"- Confine Massimo Osservato : {max_boundary}")
@@ -404,9 +422,10 @@ def main():
         manifest_file = run_path / "run_manifest.json"
         class_file = run_path / "claim_classification.json"
         metrics_file = run_path / "metrics_summary.json"
-        trial_file = run_path / "trial_metadata.json"
-        if not trial_file.exists():
-            trial_file = run_path / "raw_artifacts" / "trial_metadata.json"
+        
+        # Ricerca ricorsiva e deterministica del primo trial_metadata.json disponibile
+        found_trial_files = sorted(run_path.glob("**/trial_metadata*.json"))
+        trial_file = found_trial_files[0] if found_trial_files else (run_path / "trial_metadata.json")
 
         if manifest_file.exists():
             manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
@@ -428,7 +447,7 @@ def main():
 
     if not manifest_data and trial_data:
         manifest_data = {
-            "test_id": trial_data.get("sut", {}).get("test_id", "T01"),
+            "test_id": trial_data.get("sut", {}).get("test_id", "UNRESOLVED"),
             "sut_formal_tuple": trial_data.get("sut", {}),
             "provenance_dag": trial_data.get("provenance_dag", {}),
             "audit_trail": trial_data.get("audit_trail", {})
