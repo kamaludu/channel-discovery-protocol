@@ -1,15 +1,32 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# ======================================
+# ==============================================================================
 # CDP/SOP v2.3 METROLOGY HARNESS
 # File: core/sut_adapter.sh
-# Component: Wrapper SUT per bash4llm (v2.8.5.3)
+# Component: Wrapper SUT & Adapter Runtime per Invocazione e Introspezione
 # Standard: CDP v2.3 (Sez. 1, 4, 5) & SOP v2.3 (Sez. 1.3, 2.2, 3.1, 4.1)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
 # Contact: opensource@cevangel.anonaddy.me
-# ======================================
+# ==============================================================================
+# Requirements: bash (>=4.0), coreutils, util-linux, curl, jq, openssl, python (>=3.10 stdlib)
+#
+# ==============================================================================
+# GUIDA ARCHITETTURALE PER SVILUPPATORI / ADAPTER PLUGGABILITY:
+# ==============================================================================
+# Questo script incapsula il confine di esecuzione del System Under Test (SUT).
+# Attualmente implementa l'interfaccia verso la CLI esterna 'bash4llm'.
+# Per sostituire 'bash4llm' con un altro strumento (es. cURL nativo, libreria Python,
+# SDK proprietario o proxy locale):
+#   1. Modificare la Sezione 3 (SUT Invocator Command Assembly & Execution).
+#   2. Mappare la Sezione 4 (Artifact Harvesting) per raccogliere:
+#      - C_req_app.bin : Payload grezzo inviato sulla rete (JSON/HTTP body).
+#      - C_resp_app.json : Risposta raw ricevuta dal server.
+#      - cURL.log : Traccia di trasporto/TLS ed header HTTP.
+#   3. Tutte le sezioni metrologiche (DAG di provenienza SHA-256, predicati V3,
+#      calcolo TTFT ed emissione di trial_metadata.json) rimangono invariate.
+# ==============================================================================
 
 set -euo pipefail
 umask 077
@@ -17,11 +34,37 @@ umask 077
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
+# ==============================================================================
+# FUNZIONE HELPER: CALCOLO DETERMINISTICO DIGEST SHA-256 SUI FILE
+# ==============================================================================
+calc_sha256_file() {
+  local target_f="$1"
+  if [ ! -f "$target_f" ] || [ ! -r "$target_f" ]; then
+    printf 'NOT_OBSERVED\n'
+    return 0
+  fi
+
+  if command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 -r "$target_f" 2>/dev/null | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$target_f" 2>/dev/null | awk '{print $1}'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$target_f" 2>/dev/null || printf 'NOT_OBSERVED\n'
+  elif command -v python >/dev/null 2>&1; then
+    python -c "import hashlib, sys; print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$target_f" 2>/dev/null || printf 'NOT_OBSERVED\n'
+  else
+    printf 'NOT_OBSERVED\n'
+  fi
+}
+
+# ==============================================================================
+# SEZIONE 1: GESTIONE PARAMETRI CLI (Nessun default o provider/modello hardcoded)
+# ==============================================================================
 BASH4LLM_BIN=""
-PROVIDER="groq"
+PROVIDER=""
 MODEL_ID=""
-TEMPERATURE="1.0"
-MAX_TOKENS="4096"
+TEMPERATURE=""
+MAX_TOKENS=""
 SYSTEM_PROMPT=""
 RAW_INPUT_TEXT=""
 RAW_INPUT_FILE=""
@@ -37,24 +80,24 @@ usage() {
 Uso: sut_adapter.sh [OPZIONI]
 
 Opzioni Obbligatorie:
-  --bash4llm-bin <PATH>   Percorso dell'eseguibile bash4llm.
+  --bash4llm-bin <PATH>   Percorso dell'eseguibile SUT (bash4llm).
   --artifact-dir <DIR>    Directory di destinazione per la raccolta degli artefatti grezzi.
 
-Configurazione SUT:
-  --provider <NAME>       Provider target (groq, gemini, mistral, huggingface, openrouter).
-  --model <MODEL_ID>      Identificativo univoco del modello.
-  --temperature <FLOAT>   Parametro di temperatura (default: 1.0).
-  --max-tokens <INT>      Limite massimo di token emessi (default: 4096).
+Configurazione SUT (Se omesse, delegate alla configurazione attiva del SUT):
+  --provider <NAME>       Nome del provider target (es. groq, gemini, mistral, openrouter).
+  --model <MODEL_ID>      Identificativo del modello per l'invocazione.
+  --temperature <FLOAT>   Parametro di campionamento temperatura.
+  --max-tokens <INT>      Limite massimo di token di output.
   --system-prompt <STR>   System prompt facoltativo.
 
 Stimolo di Input:
   --input-text <STR>      Stringa scalare UTF-8 grezza (U_intended).
   --input-file <PATH>     File contenente lo stimolo di input grezzo.
-  --json-input <JSON>     Payload JSON strutturato per chiamate avanzate.
-  --intended-sha256 <HEX> Digest SHA-256 precalcolato per verifica di integrita'.
+  --json-input <JSON>     Payload JSON strutturato pre-formattato.
+  --intended-sha256 <HEX> Digest SHA-256 atteso per verifica formale pre-invio.
 
-Sicurezza e Ambiente:
-  --vault-ctx <PASS>      Passcode master o token runtime per l'OpenSSL Vault.
+Sicurezza e Controllo Runtime:
+  --vault-ctx <PASS>      Passcode master / token di sblocco per l'OpenSSL Vault.
   --dry-run               Simula l'invocazione senza eseguire traffico HTTP reale.
   --debug                 Preserva la sandbox temporanea per analisi forense.
   -h, --help              Mostra questa guida ed esce.
@@ -115,7 +158,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --intended-sha256)
-      [ $# -ge 2 ] || { printf 'sut_adapter: ERRORE: --intended-sha256 richiede un hash hex a 64 caratteri\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf 'sut_adapter: ERRORE: --intended-sha256 richiede un digest hex a 64 caratteri\n' >&2; exit 2; }
       INTENDED_SHA256_EXPECTED="$2"
       shift 2
       ;;
@@ -143,7 +186,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ -z "$BASH4LLM_BIN" ] || [ ! -f "$BASH4LLM_BIN" ]; then
-  printf 'sut_adapter: ERRORE: Eseguibile bash4llm non trovato (%s)\n' "${BASH4LLM_BIN:-<vuoto>}" >&2
+  printf 'sut_adapter: ERRORE: Eseguibile SUT non trovato (%s)\n' "${BASH4LLM_BIN:-<non_specificato>}" >&2
   exit 15
 fi
 
@@ -155,6 +198,7 @@ fi
 mkdir -p "$ARTIFACT_DIR" 2>/dev/null || true
 chmod 700 "$ARTIFACT_DIR" 2>/dev/null || true
 
+# Configurazione directory sandbox isolata
 BASE_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
 [ -d "$BASE_TMP" ] || BASE_TMP="/tmp"
 
@@ -172,6 +216,9 @@ cleanup_sandbox() {
 }
 trap cleanup_sandbox EXIT INT TERM
 
+# ==============================================================================
+# SEZIONE 2: PREPARAZIONE E VALIDAZIONE GROUND TRUTH (U_intended)
+# ==============================================================================
 STIMULUS_FILE="$SANDBOX_DIR/u_intended.bin"
 
 if [ -n "$RAW_INPUT_FILE" ] && [ -f "$RAW_INPUT_FILE" ]; then
@@ -184,17 +231,17 @@ else
   if [ ! -t 0 ]; then
     cat - > "$STIMULUS_FILE"
   else
-    printf 'sut_adapter: ERRORE: Nessuno stimolo fornito\n' >&2
+    printf 'sut_adapter: ERRORE: Nessuno stimolo di input fornito\n' >&2
     exit 14
   fi
 fi
 chmod 600 "$STIMULUS_FILE" 2>/dev/null || true
 
-STIMULUS_INTENDED_SHA256="$(openssl dgst -sha256 -r "$STIMULUS_FILE" 2>/dev/null | awk '{print $1}' || sha256sum "$STIMULUS_FILE" | awk '{print $1}')"
+STIMULUS_INTENDED_SHA256="$(calc_sha256_file "$STIMULUS_FILE")"
 U_BUFFER_BYTES_SHA256="$STIMULUS_INTENDED_SHA256"
 
 if [ -n "$INTENDED_SHA256_EXPECTED" ] && [ "$STIMULUS_INTENDED_SHA256" != "$INTENDED_SHA256_EXPECTED" ]; then
-  printf 'sut_adapter: ERRORE CRITICO [INVALID-STIMULUS]: Disallineamento hash pre-invio!\n' >&2
+  printf 'sut_adapter: ERRORE CRITICO [INVALID_STIMULUS]: Disallineamento digest SHA-256 pre-invio!\n' >&2
   INVALID_JSON="$(jq -c -n \
     --arg expected "$INTENDED_SHA256_EXPECTED" \
     --arg actual "$STIMULUS_INTENDED_SHA256" \
@@ -212,6 +259,9 @@ if [ -n "$INTENDED_SHA256_EXPECTED" ] && [ "$STIMULUS_INTENDED_SHA256" != "$INTE
   exit 15
 fi
 
+# ==============================================================================
+# SEZIONE 3: INVOCAZIONE SUT (Binding specifico bash4llm)
+# ==============================================================================
 B4L_TMPDIR="$SANDBOX_DIR/b4l_tmp"
 mkdir -p "$B4L_TMPDIR" 2>/dev/null || true
 chmod 700 "$B4L_TMPDIR" 2>/dev/null || true
@@ -220,10 +270,12 @@ export BASH4LLM_TMPDIR="$B4L_TMPDIR"
 export DEBUG_PRESERVE=1
 export NO_COLOR=1
 
+# Autenticazione OpenSSL Vault tramite variabile di contesto runtime
 if [ -n "$VAULT_SESSION_PASS" ]; then
   export _B4L_RT_CTX="$VAULT_SESSION_PASS"
 fi
 
+# Costruzione dinamica del comando bash4llm: nessun parametro opzionale viene forzato se omesso
 B4L_CMD=( bash "$BASH4LLM_BIN" --no-stream --json --nosave )
 [ -n "$PROVIDER" ] && B4L_CMD+=( --provider "$PROVIDER" )
 [ -n "$MODEL_ID" ] && B4L_CMD+=( --model "$MODEL_ID" )
@@ -236,6 +288,7 @@ B4L_CMD=( bash "$BASH4LLM_BIN" --no-stream --json --nosave )
 B4L_STDOUT_RAW="$SANDBOX_DIR/b4l_stdout.log"
 B4L_STDERR_RAW="$SANDBOX_DIR/b4l_stderr.log"
 
+# Misurazione timestamp per TTFT / E2E Latency
 T_START_EPOCH_MS="$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || python -c 'import time; print(int(time.time()*1000))' 2>/dev/null || awk 'BEGIN{srand(); printf "%d", systime()*1000}')"
 
 B4L_EXIT_CODE=0
@@ -248,6 +301,9 @@ fi
 T_END_EPOCH_MS="$(python3 -c 'import time; print(int(time.time()*1000))' 2>/dev/null || python -c 'import time; print(int(time.time()*1000))' 2>/dev/null || awk 'BEGIN{srand(); printf "%d", systime()*1000}')"
 ELAPSED_TTFT_MS=$(( T_END_EPOCH_MS - T_START_EPOCH_MS ))
 
+# ==============================================================================
+# SEZIONE 4: RACCOLTA ARTEFATTI GREZZI (Artifact Harvesting)
+# ==============================================================================
 HARVEST_REQ_FILE="$ARTIFACT_DIR/C_req_app.bin"
 HARVEST_RESP_FILE="$ARTIFACT_DIR/C_resp_app.json"
 HARVEST_CURL_LOG="$ARTIFACT_DIR/cURL.log"
@@ -256,43 +312,58 @@ HARVEST_CURL_LOG="$ARTIFACT_DIR/cURL.log"
 : > "$HARVEST_RESP_FILE"
 : > "$HARVEST_CURL_LOG"
 
-FOUND_RUN_DIR="$(find "$B4L_TMPDIR" -maxdepth 2 -type d \( -name "run.*" -o -name "groq.*" -o -name "se.*" \) 2>/dev/null | head -n 1 || true)"
+# Scansione deterministica sia nella root di B4L_TMPDIR che nelle sottodirectory generate
+SEARCH_DIRS=( "$B4L_TMPDIR" )
+while IFS= read -r sub_d; do
+  [ -n "$sub_d" ] && SEARCH_DIRS+=( "$sub_d" )
+done < <(find "$B4L_TMPDIR" -maxdepth 2 -mindepth 1 -type d 2>/dev/null || true)
 
-if [ -n "$FOUND_RUN_DIR" ] && [ -d "$FOUND_RUN_DIR" ]; then
-  RAW_PAYLOAD_MATCH="$(find "$FOUND_RUN_DIR" -maxdepth 1 -type f -name "payload*" 2>/dev/null | head -n 1 || true)"
-  if [ -n "$RAW_PAYLOAD_MATCH" ] && [ -s "$RAW_PAYLOAD_MATCH" ]; then
-    if [[ "$RAW_PAYLOAD_MATCH" == *.b64 ]]; then
-      if command -v openssl >/dev/null 2>&1; then
-        openssl enc -base64 -d < "$RAW_PAYLOAD_MATCH" > "$HARVEST_REQ_FILE" 2>/dev/null || true
+for s_dir in "${SEARCH_DIRS[@]}"; do
+  # 1. Raccolta Payload di Richiesta
+  if [ ! -s "$HARVEST_REQ_FILE" ]; then
+    RAW_PAYLOAD_MATCH="$(find "$s_dir" -maxdepth 1 -type f -name "payload*" 2>/dev/null | head -n 1 || true)"
+    if [ -n "$RAW_PAYLOAD_MATCH" ] && [ -s "$RAW_PAYLOAD_MATCH" ]; then
+      if [[ "$RAW_PAYLOAD_MATCH" == *.b64 ]]; then
+        if command -v openssl >/dev/null 2>&1; then
+          openssl enc -base64 -d < "$RAW_PAYLOAD_MATCH" > "$HARVEST_REQ_FILE" 2>/dev/null || true
+        else
+          base64 -d < "$RAW_PAYLOAD_MATCH" > "$HARVEST_REQ_FILE" 2>/dev/null || true
+        fi
       else
-        base64 -d < "$RAW_PAYLOAD_MATCH" > "$HARVEST_REQ_FILE" 2>/dev/null || true
+        cp -f "$RAW_PAYLOAD_MATCH" "$HARVEST_REQ_FILE"
       fi
-    else
-      cp -f "$RAW_PAYLOAD_MATCH" "$HARVEST_REQ_FILE"
     fi
   fi
 
-  if [ -f "$FOUND_RUN_DIR/resp.json" ] && [ -s "$FOUND_RUN_DIR/resp.json" ]; then
-    cp -f "$FOUND_RUN_DIR/resp.json" "$HARVEST_RESP_FILE"
+  # 2. Raccolta Payload di Risposta
+  if [ ! -s "$HARVEST_RESP_FILE" ] && [ -f "$s_dir/resp.json" ] && [ -s "$s_dir/resp.json" ]; then
+    cp -f "$s_dir/resp.json" "$HARVEST_RESP_FILE"
   fi
 
-  if [ -f "$FOUND_RUN_DIR/err.log" ]; then
-    cp -f "$FOUND_RUN_DIR/err.log" "$HARVEST_CURL_LOG"
+  # 3. Raccolta Log cURL
+  if [ -f "$s_dir/err.log" ] && [ -s "$s_dir/err.log" ]; then
+    cat "$s_dir/err.log" >> "$HARVEST_CURL_LOG" 2>/dev/null || true
   fi
-fi
+done
 
+# Fallback stdout: se resp.json non era presente su disco ma il payload JSON e' stato emesso su stdout
 if [ ! -s "$HARVEST_RESP_FILE" ] && [ -s "$B4L_STDOUT_RAW" ]; then
   if jq -e . "$B4L_STDOUT_RAW" >/dev/null 2>&1; then
     cp -f "$B4L_STDOUT_RAW" "$HARVEST_RESP_FILE"
   fi
 fi
 
+# Preservazione integrale di stderr per tracciabilita' diagnostica
 cat "$B4L_STDERR_RAW" >> "$HARVEST_CURL_LOG" 2>/dev/null || true
 chmod 600 "$HARVEST_REQ_FILE" "$HARVEST_RESP_FILE" "$HARVEST_CURL_LOG" 2>/dev/null || true
 
-C_REQ_APP_BYTES_SHA256="$(openssl dgst -sha256 -r "$HARVEST_REQ_FILE" 2>/dev/null | awk '{print $1}' || sha256sum "$HARVEST_REQ_FILE" | awk '{print $1}')"
-C_RESP_APP_BYTES_SHA256="$(openssl dgst -sha256 -r "$HARVEST_RESP_FILE" 2>/dev/null | awk '{print $1}' || sha256sum "$HARVEST_RESP_FILE" | awk '{print $1}')"
+# ==============================================================================
+# SEZIONE 5: INTROSPEZIONE DETERMINISTICA & CALCOLO DEL DAG DI PROVENIENZA
+# ==============================================================================
+C_REQ_APP_BYTES_SHA256="$(calc_sha256_file "$HARVEST_REQ_FILE")"
+C_RESP_APP_BYTES_SHA256="$(calc_sha256_file "$HARVEST_RESP_FILE")"
 
+# Estrazione del testo Unicode dal payload applicativo di richiesta (C_req_unicode)
 C_REQ_UNICODE_EXTRACTED=""
 C_REQ_UNICODE_SHA256="null"
 
@@ -303,7 +374,9 @@ if [ -s "$HARVEST_REQ_FILE" ] && jq -e . "$HARVEST_REQ_FILE" >/dev/null 2>&1; th
     elif .contents then
       ([.contents[] | select(.role=="user") | .parts[0].text] | last) // ""
     elif .inputs then
-      .inputs
+      if (.inputs | type) == "string" then .inputs else (.inputs | tostring) end
+    elif .prompt then
+      .prompt
     else
       ""
     end
@@ -312,11 +385,12 @@ if [ -s "$HARVEST_REQ_FILE" ] && jq -e . "$HARVEST_REQ_FILE" >/dev/null 2>&1; th
   if [ -n "$C_REQ_UNICODE_EXTRACTED" ]; then
     TMP_REQ_U_FILE="$SANDBOX_DIR/req_u.txt"
     printf '%s' "$C_REQ_UNICODE_EXTRACTED" > "$TMP_REQ_U_FILE"
-    C_REQ_UNICODE_SHA256="$(openssl dgst -sha256 -r "$TMP_REQ_U_FILE" 2>/dev/null | awk '{print $1}' || sha256sum "$TMP_REQ_U_FILE" | awk '{print $1}')"
+    C_REQ_UNICODE_SHA256="$(calc_sha256_file "$TMP_REQ_U_FILE")"
     rm -f "$TMP_REQ_U_FILE" 2>/dev/null || true
   fi
 fi
 
+# Estrazione dell'output terminale deserializzato (O_parsed)
 PARSED_OUTPUT_TEXT=""
 OUTPUT_PARSED_SHA256="null"
 
@@ -328,6 +402,8 @@ if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; 
       (.candidates[0].content.parts[0].text // "")
     elif .output_text then
       .output_text
+    elif .generated_text then
+      .generated_text
     else
       ""
     end
@@ -336,21 +412,59 @@ if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; 
   if [ -n "$PARSED_OUTPUT_TEXT" ]; then
     TMP_PARSED_FILE="$SANDBOX_DIR/parsed_out.txt"
     printf '%s' "$PARSED_OUTPUT_TEXT" > "$TMP_PARSED_FILE"
-    OUTPUT_PARSED_SHA256="$(openssl dgst -sha256 -r "$TMP_PARSED_FILE" 2>/dev/null | awk '{print $1}' || sha256sum "$TMP_PARSED_FILE" | awk '{print $1}')"
+    OUTPUT_PARSED_SHA256="$(calc_sha256_file "$TMP_PARSED_FILE")"
     rm -f "$TMP_PARSED_FILE" 2>/dev/null || true
   fi
 fi
 
-REQ_ID_EXTRACTED="none"
-HTTP_STATUS_EXTRACTED=0
-FINISH_REASON_EXTRACTED="unknown"
+# Introspezione reale dei metadati di risposta e status di rete (Nessun valore inventato)
+REQ_ID_EXTRACTED="NOT_OBSERVED"
+FINISH_REASON_EXTRACTED="NOT_OBSERVED"
+HTTP_STATUS_EXTRACTED="null"
+ACTUAL_OBSERVED_MODEL="UNRESOLVED"
+ACTUAL_OBSERVED_PROVIDER="UNRESOLVED"
 
-if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
-  REQ_ID_EXTRACTED="$(jq -r '.id // .x_groq?.id // "synthetic"' "$HARVEST_RESP_FILE" 2>/dev/null || echo "none")"
-  FINISH_REASON_EXTRACTED="$(jq -r '.choices[0]?.finish_reason // .candidates[0]?.finishReason // "unknown"' "$HARVEST_RESP_FILE" 2>/dev/null || echo "unknown")"
-  [ "$B4L_EXIT_CODE" -eq 0 ] && HTTP_STATUS_EXTRACTED=200 || HTTP_STATUS_EXTRACTED=400
+# 1. Rilevamento Provider Effettivo
+if [ -n "$PROVIDER" ]; then
+  ACTUAL_OBSERVED_PROVIDER="$PROVIDER"
+else
+  if [ -n "$BASH4LLM_BIN" ]; then
+    ACTIVE_PROV_FILE="$(bash "$BASH4LLM_BIN" --print-provider-file 2>/dev/null || true)"
+    if [ -n "$ACTIVE_PROV_FILE" ] && [ -f "$ACTIVE_PROV_FILE" ]; then
+      ACTUAL_OBSERVED_PROVIDER="$(cat "$ACTIVE_PROV_FILE" 2>/dev/null | tr -d ' \n\r' || echo "UNRESOLVED")"
+    fi
+  fi
 fi
 
+# 2. Rilevamento Metadati dal Payload di Risposta
+if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
+  REQ_ID_EXTRACTED="$(jq -r '.id // .x_groq?.id // .header?.["x-request-id"] // "NOT_OBSERVED"' "$HARVEST_RESP_FILE" 2>/dev/null || echo "NOT_OBSERVED")"
+  FINISH_REASON_EXTRACTED="$(jq -r '.choices[0]?.finish_reason // .candidates[0]?.finishReason // "NOT_OBSERVED"' "$HARVEST_RESP_FILE" 2>/dev/null || echo "NOT_OBSERVED")"
+  
+  RESP_MODEL="$(jq -r '.model // empty' "$HARVEST_RESP_FILE" 2>/dev/null || true)"
+  if [ -n "$RESP_MODEL" ]; then
+    ACTUAL_OBSERVED_MODEL="$RESP_MODEL"
+  elif [ -n "$MODEL_ID" ]; then
+    ACTUAL_OBSERVED_MODEL="$MODEL_ID"
+  fi
+elif [ -n "$MODEL_ID" ]; then
+  ACTUAL_OBSERVED_MODEL="$MODEL_ID"
+fi
+
+# 3. Estrazione reale dell'HTTP Status Code dai log di trasporto cURL o da JSON error
+HTTP_CODE_CURL="$(grep -E -o '< HTTP/[123.]+ [0-9]{3}|HTTP/[123.]+ [0-9]{3}' "$HARVEST_CURL_LOG" 2>/dev/null | tail -n 1 | awk '{print $NF}' || true)"
+if [ -n "$HTTP_CODE_CURL" ] && [[ "$HTTP_CODE_CURL" =~ ^[0-9]{3}$ ]]; then
+  HTTP_STATUS_EXTRACTED="$HTTP_CODE_CURL"
+elif [ -s "$HARVEST_RESP_FILE" ] && jq -e '.error.code' "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
+  JSON_ERR_CODE="$(jq -r '.error.code' "$HARVEST_RESP_FILE" 2>/dev/null || true)"
+  if [[ "$JSON_ERR_CODE" =~ ^[0-9]{3}$ ]]; then
+    HTTP_STATUS_EXTRACTED="$JSON_ERR_CODE"
+  fi
+fi
+
+# ==============================================================================
+# SEZIONE 6: PREDICATI METROLOGICI & CLASSIFICAZIONE OSSERVABILITA V3
+# ==============================================================================
 P_APP_REQUEST_OBSERVED=false
 P_FINGERPRINT_MATCH=false
 P_RESPONSE_CORRELATION=false
@@ -364,7 +478,7 @@ if [ "$P_APP_REQUEST_OBSERVED" = "true" ]; then
       P_FINGERPRINT_MATCH=true
     fi
   else
-    if jq -e 'has("messages") or has("contents") or has("inputs")' "$HARVEST_REQ_FILE" >/dev/null 2>&1; then
+    if jq -e 'has("messages") or has("contents") or has("inputs") or has("prompt")' "$HARVEST_REQ_FILE" >/dev/null 2>&1; then
       P_FINGERPRINT_MATCH=true
     fi
   fi
@@ -379,13 +493,13 @@ V3_MOTIVATION="Nessun traffico applicativo catturato sul confine di invocazione.
 
 if [ "$P_APP_REQUEST_OBSERVED" = "true" ] && [ "$P_FINGERPRINT_MATCH" = "true" ] && [ "$P_RESPONSE_CORRELATION" = "true" ] && [ "$P_HARNESS_ISOLATION" = "true" ]; then
   V3_CLASSIFICATION="V3-3 (App-Layer Verified)"
-  V3_MOTIVATION="Payload C_req_app materializzato, C_req_unicode verificato e correlazione ID risposta confermata."
+  V3_MOTIVATION="Payload C_req_app materializzato, C_req_unicode verificato e correlazione risposta confermata."
 elif [ "$P_APP_REQUEST_OBSERVED" = "true" ]; then
   V3_CLASSIFICATION="V3-1 (Traffic Detected / Partial Match)"
-  V3_MOTIVATION="Payload di richiesta presente ma correlazione di risposta parziale."
+  V3_MOTIVATION="Payload di richiesta presente ma correlazione di risposta parziale o exit code non nullo."
 elif [ "$DRY_RUN_MODE" -eq 1 ]; then
   V3_CLASSIFICATION="V3-0b (Dry-Run Simulation)"
-  V3_MOTIVATION="Modalita dry-run attiva; chiamate di rete simulate."
+  V3_MOTIVATION="Modalita dry-run attiva; invocazione simulata senza rete."
 fi
 
 OUTPUT_PROVENANCE="UNKNOWN"
@@ -402,13 +516,16 @@ elif [ "$B4L_EXIT_CODE" -ne 0 ]; then
   OUTPUT_PROVENANCE="UNKNOWN"
 fi
 
+# ==============================================================================
+# SEZIONE 7: EMISSIONE METADATI DEL TRIAL (trial_metadata.json)
+# ==============================================================================
 TRIAL_METADATA_FILE="$ARTIFACT_DIR/trial_metadata.json"
 
 TRIAL_JSON="$(jq -c -n \
-  --arg prov "$PROVIDER" \
-  --arg mod "$MODEL_ID" \
-  --argjson temp "$TEMPERATURE" \
-  --argjson max_tok "$MAX_TOKENS" \
+  --arg prov "$ACTUAL_OBSERVED_PROVIDER" \
+  --arg mod "$ACTUAL_OBSERVED_MODEL" \
+  --arg temp "${TEMPERATURE:-null}" \
+  --arg max_tok "${MAX_TOKENS:-null}" \
   --arg u_sha "$STIMULUS_INTENDED_SHA256" \
   --arg u_buf_sha "$U_BUFFER_BYTES_SHA256" \
   --arg req_u_sha "$C_REQ_UNICODE_SHA256" \
@@ -416,7 +533,7 @@ TRIAL_JSON="$(jq -c -n \
   --arg resp_sha "$C_RESP_APP_BYTES_SHA256" \
   --arg out_sha "$OUTPUT_PARSED_SHA256" \
   --arg req_id "$REQ_ID_EXTRACTED" \
-  --argjson http_st "$HTTP_STATUS_EXTRACTED" \
+  --arg http_st "$HTTP_STATUS_EXTRACTED" \
   --arg fin_r "$FINISH_REASON_EXTRACTED" \
   --argjson b4l_rc "$B4L_EXIT_CODE" \
   --argjson ttft_ms "$ELAPSED_TTFT_MS" \
@@ -432,8 +549,8 @@ TRIAL_JSON="$(jq -c -n \
     sut: {
       provider: $prov,
       model_id: $mod,
-      temperature: $temp,
-      max_tokens: $max_tok
+      temperature: (if $temp == "null" then null else ($temp | tonumber? // null) end),
+      max_tokens: (if $max_tok == "null" then null else ($max_tok | tonumber? // null) end)
     },
     timing: {
       ttft_observed_e2e_ms: $ttft_ms
@@ -442,13 +559,13 @@ TRIAL_JSON="$(jq -c -n \
       stimulus_intended_sha256: $u_sha,
       u_buffer_bytes_sha256: $u_buf_sha,
       c_req_unicode_sha256: (if $req_u_sha == "null" then null else $req_u_sha end),
-      c_req_app_bytes_sha256: $req_sha,
-      c_resp_app_bytes_sha256: $resp_sha,
+      c_req_app_bytes_sha256: (if $req_sha == "NOT_OBSERVED" then null else $req_sha end),
+      c_resp_app_bytes_sha256: (if $resp_sha == "NOT_OBSERVED" then null else $resp_sha end),
       output_parsed_sha256: (if $out_sha == "null" then null else $out_sha end)
     },
     audit_trail: {
       req_id_extracted: $req_id,
-      http_status: $http_st,
+      http_status: (if $http_st == "null" or $http_st == "NOT_OBSERVED" then null else ($http_st | tonumber? // null) end),
       finish_reason: $fin_r,
       bash4llm_exit_code: $b4l_rc,
       v3_classification: $v3_cls,
@@ -458,7 +575,7 @@ TRIAL_JSON="$(jq -c -n \
         P_fingerprint_match: $p_fp,
         P_response_correlation: $p_corr,
         P_harness_isolation: $p_iso,
-        P_external_concurrency: "UNKNOWN (Non-observable without OS-wide tracing)"
+        P_external_concurrency: "NOT_OBSERVED (Requires OS tracing)"
       }
     },
     evaluation: {
