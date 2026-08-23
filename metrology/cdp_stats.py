@@ -263,12 +263,14 @@ def a_priori_sample_size_r2(
 
 def main():
     common_parser = argparse.ArgumentParser(add_help=False)
-    common_parser.add_argument("--out", default=None, help="Percorso file JSON di output")
+    common_parser.add_argument("--out", default=argparse.SUPPRESS, help="Percorso file JSON di output")
 
     parser = argparse.ArgumentParser(
         description="CDP/SOP v2.3 Metrology Statistical Engine",
         parents=[common_parser]
     )
+    parser.set_defaults(out=None)
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_binom = subparsers.add_parser("binomial", parents=[common_parser], help="Intervallo Esatto Clopper-Pearson")
