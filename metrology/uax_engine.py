@@ -4,7 +4,7 @@
 # ==============================================================================
 # CDP Unicode Normalizer — Gestore Forme Normalizzate UAX #15 e Policy UAX #29
 # File: metrology/uax_engine.py
-# Component: Unicode Metrology Engine (M2a / M2b)
+# Component: Unicode Metrology Engine (Criteri M2a / M2b)
 # Standard: CDP v2.3 (Sez. 3.1, 5.1) & SOP v2.3 (Sez. 2.4, T03)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
@@ -12,6 +12,18 @@
 # Contact: opensource@cevangel.anonaddy.me
 # ==============================================================================
 # Requirements: python (>=3.10), strictly standard library (zero-pip dependencies)
+#
+# ==============================================================================
+# GUIDA ARCHITETTURALE PER SVILUPPATORI (SUT / Tool Independent):
+# ==============================================================================
+# Questo modulo implementa il motore di analisi metrologica per le trasformazioni
+# Unicode secondo lo standard Unicode UAX #15. È completamente agnostico rispetto
+# allo strumento di invocazione (bash4llm, cURL o altri):
+#   - Calcola i profili di decomposizione canonica e compatibile (NFC, NFD, NFKC, NFKD).
+#   - Valuta l'equivalenza formale M2a tra stimolo inviato (U_intended) e output (O).
+#   - Esamina i singoli codepoint e le categorie generali Unicode (Cc, Cf, ecc.).
+#   - Dichiara formalmente la politica M2b per ambienti Zero-PIP (stdlib pura).
+# ==============================================================================
 
 import argparse
 import hashlib
@@ -19,6 +31,7 @@ import json
 import sys
 import unicodedata
 from pathlib import Path
+from typing import Any, Dict, List
 
 
 M2B_STATUS_POLICY = "UNAVAILABLE_IN_STDLIB_MODE"
@@ -30,23 +43,27 @@ M2B_POLICY_EXPLANATION = (
 )
 
 
-def get_unicode_telemetry() -> dict:
+def get_unicode_telemetry() -> Dict[str, Any]:
+    """Acquisisce le versioni runtime della tabella Unicode e dell'interprete Python."""
     return {
         "unicodedata_version": unicodedata.unidata_version,
         "python_version": sys.version.split()[0],
-        "m2b_segmentation_status": M2B_STATUS_POLICY
+        "m2b_segmentation_status": M2B_STATUS_POLICY,
+        "m2b_policy_explanation": M2B_POLICY_EXPLANATION
     }
 
 
 def normalize_form(text: str, form: str) -> str:
+    """Applica la normalizzazione Unicode UAX #15 (NFC, NFD, NFKC, NFKD)."""
     form_upper = form.upper()
     if form_upper not in ["NFC", "NFD", "NFKC", "NFKD"]:
         raise ValueError(f"Forma di normalizzazione non valida: {form}. Ammessi: NFC, NFD, NFKC, NFKD.")
     return unicodedata.normalize(form_upper, text)
 
 
-def decompose_normalization_profile(text: str) -> dict:
-    profile = {
+def decompose_normalization_profile(text: str) -> Dict[str, Any]:
+    """Genera il profilo completo delle 4 forme normalizzate con digest SHA-256 e codepoint."""
+    profile: Dict[str, Any] = {
         "raw": {
             "literal": text,
             "scalar_count": len(text),
@@ -71,7 +88,8 @@ def decompose_normalization_profile(text: str) -> dict:
     return profile
 
 
-def evaluate_m2a_equivalence(s1: str, s2: str, form: str = "NFC") -> dict:
+def evaluate_m2a_equivalence(s1: str, s2: str, form: str = "NFC") -> Dict[str, Any]:
+    """Valuta se due stringhe s1 e s2 sono equivalenti sotto la forma normale specificata."""
     norm_s1 = normalize_form(s1, form)
     norm_s2 = normalize_form(s2, form)
     is_equiv = (norm_s1 == norm_s2)
@@ -86,7 +104,8 @@ def evaluate_m2a_equivalence(s1: str, s2: str, form: str = "NFC") -> dict:
     }
 
 
-def analyze_unicode_codepoints(text: str) -> list:
+def analyze_unicode_codepoints(text: str) -> List[Dict[str, Any]]:
+    """Scompone una stringa in singoli scalari Unicode con metadati categoriali completi."""
     breakdown = []
     for char in text:
         cp = ord(char)
@@ -105,12 +124,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="CDP/SOP v2.3 Unicode UAX #15 Engine & M2a Metrology Evaluator"
     )
-    parser.add_argument("--text", default=None)
-    parser.add_argument("--file", default=None)
-    parser.add_argument("--compare", nargs=2, metavar=("S1", "S2"))
-    parser.add_argument("--form", choices=["NFC", "NFD", "NFKC", "NFKD"], default="NFC")
-    parser.add_argument("--telemetry", action="store_true")
-    parser.add_argument("--out", default=None)
+    parser.add_argument("--text", default=None, help="Stringa scalare da analizzare")
+    parser.add_argument("--file", default=None, help="File di input contenente il testo da analizzare")
+    parser.add_argument("--compare", nargs=2, metavar=("S1", "S2"), help="Confronta due stringhe sotto equivalenza M2a")
+    parser.add_argument("--form", choices=["NFC", "NFD", "NFKC", "NFKD"], default="NFC", help="Forma normale per il confronto (default: NFC)")
+    parser.add_argument("--telemetry", action="store_true", help="Emette la telemetria delle versioni Unicode/Python")
+    parser.add_argument("--out", default=None, help="File JSON di output (default: stdout)")
     args = parser.parse_args()
 
     if args.telemetry:
@@ -149,3 +168,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
