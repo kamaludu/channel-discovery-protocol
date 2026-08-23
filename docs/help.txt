@@ -28,7 +28,7 @@ Passo 1. Calibrazione Iniziale (Obbligatoria):
 
 Passo 2. Esecuzione Batteria o Singolo Test:
   $ cdp run ALL_FOUNDATIONAL
-  $ cdp run T01 --regime pilot
+  $ cdp run T01 --regime pilot --pacing 4
   $ cdp run T12 --mde 100.0
 
 Passo 3. Consultazione Referto SOTU Master:
@@ -45,6 +45,8 @@ Passo 4. Compilazione Dossier di Campagna:
     Esegue una sessione di test formale.
     Target: RUN0, T01..T14, ALL_FOUNDATIONAL, ALL.
     Opzioni disponibili:
+      --pacing <SEC>
+        Intervallo di sicurezza in secondi tra chiamate API per rate limit (default: 4).
       --provider <NAME>
         Provider target (es. groq, gemini, mistral, openrouter). Se omesso, delega alla configurazione attiva di bash4llm.
       --model <MODEL_ID>
@@ -140,7 +142,7 @@ Passo 4. Compilazione Dossier di Campagna:
 
   cdp_run.sh
     Orchestratore master di esecuzione test.
-    Uso: ./cdp_run.sh --test <ID> [--regime <REGIME>] [--provider <NAME>] [--model <ID>] [--endpoint <URL>] [--mde <MS>] [--bash4llm-bin <PATH>] [--vault-ctx <PASS>] [--dry-run] [--debug]
+    Uso: ./cdp_run.sh --test <ID> [--pacing <SEC>] [--regime <REGIME>] [--provider <NAME>] [--model <ID>] [--endpoint <URL>] [--mde <MS>] [--bash4llm-bin <PATH>] [--vault-ctx <PASS>] [--dry-run] [--debug]
 
   core/env_telemetry.sh
     Sonda telemetrica ambientale e baseline RTT.
@@ -157,9 +159,9 @@ Passo 4. Compilazione Dossier di Campagna:
   metrology/cdp_stats.py
     Motore statistico metrologico Clopper-Pearson, Paired TTFT e Power Analysis.
     Uso:
-      python3 metrology/cdp_stats.py binomial -k <K> -n <N> [--alpha <FLOAT>] [--out <FILE>]
-      python3 metrology/cdp_stats.py paired-ttft --pairs-json <FILE> [--mde <MS>] [--alpha <FLOAT>] [--bootstrap-reps <N>] [--out <FILE>]
-      python3 metrology/cdp_stats.py power --mde <DELTA_MIN> --pilot-sd <SD> [--power <FLOAT>] [--out <FILE>]
+      python3 metrology/cdp_stats.py [--out <FILE>] binomial -k <K> -n <N> [--alpha <FLOAT>]
+      python3 metrology/cdp_stats.py [--out <FILE>] paired-ttft --pairs-json <FILE> [--mde <MS>] [--alpha <FLOAT>] [--bootstrap-reps <N>]
+      python3 metrology/cdp_stats.py [--out <FILE>] power --mde <DELTA_MIN> --pilot-sd <SD> [--power <FLOAT>]
 
   metrology/claim_classifier.py
     Motore deterministico Decision DAG e ruling differenziale H1-H5.
