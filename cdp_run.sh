@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# ======================================
+# ==============================================================================
 # CDP Orchestratore di Test & Runner Master — Esecutore Metrologico per RUN0 e Suite T01-T14
 # File: cdp_run.sh
 # Component: Core Test Orchestrator & Execution Engine
+# Standard: CDP v2.3 (Sez. 4, 5, 8, 9) & SOP v2.3 (Sez. 1, 2, 3, 4, 5)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
 # Contact: opensource@cevangel.anonaddy.me
-# ======================================
+# ==============================================================================
 # Requirements: bash (>=4.0), coreutils, util-linux, curl, jq, openssl, python (>=3.10 stdlib)
+#
+# ==============================================================================
+# GUIDA ARCHITETTURALE PER SVILUPPATORI (SUT Orchestration & Workflow):
+# ==============================================================================
+# Questo script coordina il ciclo di vita metrologico completo di ciascun test:
+#   [1/6] Acquisizione telemetria host (core/env_telemetry.sh).
+#   [2/6] Generazione stimoli OFAT e ground truth SHA-256 (core/ofat_builder.py).
+#   [3/6] Esecuzione trial sul SUT adapter (core/sut_adapter.sh -> SUT / bash4llm).
+#   [4/6] Calcolo statistico (metrology/cdp_stats.py: Clopper-Pearson o Paired TTFT).
+#   [5/6] Decision DAG & classificazione epistemica (metrology/claim_classifier.py).
+#   [6/6] Compilazione Scheda Master SOTU v2.3 (reporters/sotu_master.py).
+#
+# Non sono presenti provider, modelli, endpoint o digest SHA-256 cablati:
+# ogni parametro viene propagato dinamicamente o rilevato a runtime dal SUT.
+# ==============================================================================
 
 set -euo pipefail
 umask 077
@@ -25,6 +41,7 @@ METROLOGY_DIR="$WORKSPACE_DIR/metrology"
 REPORTERS_DIR="$WORKSPACE_DIR/reporters"
 RUNS_BASE_DIR="$WORKSPACE_DIR/runs"
 
+# Rilevamento binario SUT (bash4llm)
 BASH4LLM_BIN=""
 if [ -f "$WORKSPACE_DIR/bash4llm" ]; then
   BASH4LLM_BIN="$WORKSPACE_DIR/bash4llm"
@@ -36,14 +53,16 @@ elif command -v bash4llm >/dev/null 2>&1; then
   BASH4LLM_BIN="$(command -v bash4llm)"
 fi
 
+# Rilevamento runtime Python stdlib
 PYTHON_BIN="python3"
 if ! command -v python3 >/dev/null 2>&1 && command -v python >/dev/null 2>&1; then
   PYTHON_BIN="python"
 fi
 
+# Inizializzazione parametri (Nessun default statico forzato)
 TEST_ID="RUN0"
 REGIME="R1_PILOT"
-PROVIDER="groq"
+PROVIDER=""
 MODEL_ID=""
 ENDPOINT_URL=""
 MDE_MS="100.0"
@@ -56,17 +75,22 @@ usage() {
   cat <<'EOF'
 Uso: ./cdp_run.sh [OPZIONI]
 
-Target:
-  --test <ID>          RUN0, T01..T14, ALL_FOUNDATIONAL, ALL.
+Target e Regime:
+  --test <ID>          RUN0, T01..T14, ALL_FOUNDATIONAL, ALL (default: RUN0).
   --regime <REGIME>    pilot (N=5) | confirmatory (N=20). Default: pilot.
-  --provider <NAME>    groq, gemini, mistral, huggingface, openrouter.
-  --model <MODEL_ID>   Model ID esplicito.
-  --endpoint <URL>     Endpoint URL per telemetria RTT.
+
+Configurazione SUT (Se omesse, delegate alla configurazione attiva di bash4llm):
+  --provider <NAME>    Nome del provider target (es. groq, gemini, mistral, openrouter).
+  --model <MODEL_ID>   Model ID esplicito per l'esecuzione.
+  --endpoint <URL>     Endpoint URL per stima telemetrica baseline RTT.
   --mde <FLOAT>        Minima Differenza Rilevante in ms per T12 (default: 100.0).
-  --vault-ctx <PASS>   Master passcode per sblocco Vault.
-  --dry-run            Simulazione senza chiamate HTTP.
-  --debug              Preserva directory temporanee.
-  -h, --help           Mostra questa guida.
+  --bash4llm-bin <PATH> Percorso dell'eseguibile SUT (bash4llm).
+  --vault-ctx <PASS>   Master passcode per sblocco OpenSSL Vault in bash4llm.
+
+Controlli di Esecuzione:
+  --dry-run            Simulazione locale senza traffico HTTP.
+  --debug              Preserva le sandbox temporanee per analisi forense.
+  -h, --help           Mostra questa guida ed esce.
 EOF
   exit 0
 }
@@ -135,28 +159,19 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# Validazione esistenza eseguibile SUT
 if [ -z "$BASH4LLM_BIN" ] || [ ! -f "$BASH4LLM_BIN" ]; then
-  printf 'cdp_run: ERRORE CRITICO: bash4llm non trovato. Specificare --bash4llm-bin <PATH>\n' >&2
+  printf 'cdp_run: ERRORE CRITICO: Eseguibile SUT non trovato. Specificare --bash4llm-bin <PATH>\n' >&2
   exit 15
-fi
-
-if [ -z "$ENDPOINT_URL" ]; then
-  case "$PROVIDER" in
-    groq) ENDPOINT_URL="https://api.groq.com/openai/v1/chat/completions" ;;
-    gemini) ENDPOINT_URL="https://generativelanguage.googleapis.com" ;;
-    mistral) ENDPOINT_URL="https://api.mistral.ai/v1/chat/completions" ;;
-    huggingface) ENDPOINT_URL="https://router.huggingface.co/v1/chat/completions" ;;
-    openrouter) ENDPOINT_URL="https://openrouter.ai/api/v1/chat/completions" ;;
-    *) ENDPOINT_URL="https://api.groq.com/openai/v1/chat/completions" ;;
-  esac
 fi
 
 run_single_test_unit() {
   local target_test="$1"
   local ts_now nonce_hex run_id run_dir artifacts_dir
   ts_now="$(date +%Y%m%d_%H%M%S)"
-  nonce_hex="$(head -c 16 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null | cut -c1-6 || python3 -c 'import secrets; print(secrets.token_hex(3).upper())' 2>/dev/null || printf '%06x' "$RANDOM")"
-  nonce_hex="$(printf '%s' "$nonce_hex" | tr '[:lower:]' '[:upper:]')"
+  
+  # Generazione CSPRNG deterministica del nonce senza dipendenze binarie esterne
+  nonce_hex="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(3).upper())' 2>/dev/null || printf '%06X' "$RANDOM")"
 
   run_id="RUN_${ts_now}_${target_test}_${nonce_hex}"
   run_dir="$RUNS_BASE_DIR/$run_id"
@@ -170,14 +185,25 @@ run_single_test_unit() {
   printf '| Session Storage: %-59s |\n' "$run_id"
   printf '+------------------------------------------------------------------------------+\n'
 
-  printf 'cdp_run: [1/6] Acquisizione telemetria host Termux e baseline RTT...\n'
+  # ---------------------------------------------------------------------------
+  # [1/6] TELEMETRIA HOST & BASELINE RTT
+  # ---------------------------------------------------------------------------
+  printf 'cdp_run: [1/6] Acquisizione telemetria host e baseline RTT...\n'
   local telem_json_file="$run_dir/host_telemetry.json"
-  bash "$CORE_DIR/env_telemetry.sh" --endpoint "$ENDPOINT_URL" --out "$telem_json_file" --quiet
+  local telem_opts=( --out "$telem_json_file" --quiet )
+  [ -n "$ENDPOINT_URL" ] && telem_opts+=( --endpoint "$ENDPOINT_URL" )
+  bash "$CORE_DIR/env_telemetry.sh" "${telem_opts[@]}"
 
+  # ---------------------------------------------------------------------------
+  # [2/6] GENERAZIONE STIMOLI OFAT & GROUND TRUTH METROLOGICA
+  # ---------------------------------------------------------------------------
   printf 'cdp_run: [2/6] Generazione stimoli canonici via ofat_builder.py...\n'
   local stimulus_meta_file="$run_dir/stimulus_meta.json"
   "$PYTHON_BIN" "$CORE_DIR/ofat_builder.py" --test "$target_test" --out "$stimulus_meta_file"
 
+  # ---------------------------------------------------------------------------
+  # [3/6] ESECUZIONE TRIAL SPERIMENTALI SUL SUT ADAPTER
+  # ---------------------------------------------------------------------------
   printf 'cdp_run: [3/6] Esecuzione trial SUT...\n'
   local -a trial_meta_files=()
   local ttft_pairs_file="$run_dir/ttft_pairs.json"
@@ -186,16 +212,17 @@ run_single_test_unit() {
   if [ "$target_test" = "RUN0" ]; then
     local trial_art_dir="$artifacts_dir/trial_01"
     mkdir -p "$trial_art_dir"
-    local raw_stim
-    raw_stim="$("$PYTHON_BIN" "$CORE_DIR/ofat_builder.py" --test "RUN0" --format raw)"
+    local raw_stim run0_expected_sha
+    raw_stim="$(jq -r '.target.literal // .expected_canary' "$stimulus_meta_file")"
+    run0_expected_sha="$(jq -r '.target.sha256' "$stimulus_meta_file")"
 
     local adapter_opts=(
       --bash4llm-bin "$BASH4LLM_BIN"
-      --provider "$PROVIDER"
       --artifact-dir "$trial_art_dir"
       --input-text "$raw_stim"
-      --intended-sha256 "dd4019696497ad7e1ca011fe83f57a7354edf66f62fd84f7eb03bbb49134c4e9"
+      --intended-sha256 "$run0_expected_sha"
     )
+    [ -n "$PROVIDER" ] && adapter_opts+=( --provider "$PROVIDER" )
     [ -n "$MODEL_ID" ] && adapter_opts+=( --model "$MODEL_ID" )
     [ -n "$VAULT_PASS" ] && adapter_opts+=( --vault-ctx "$VAULT_PASS" )
     [ "$DRY_RUN_FLAG" -eq 1 ] && adapter_opts+=( --dry-run )
@@ -214,8 +241,9 @@ run_single_test_unit() {
       local sub_b="$artifacts_dir/trial_${trial_idx}_B"
       mkdir -p "$sub_a" "$sub_b"
 
-      local t_opts_a=( --bash4llm-bin "$BASH4LLM_BIN" --provider "$PROVIDER" --artifact-dir "$sub_a" --input-text "$stim_a" )
-      local t_opts_b=( --bash4llm-bin "$BASH4LLM_BIN" --provider "$PROVIDER" --artifact-dir "$sub_b" --input-text "$stim_b" )
+      local t_opts_a=( --bash4llm-bin "$BASH4LLM_BIN" --artifact-dir "$sub_a" --input-text "$stim_a" )
+      local t_opts_b=( --bash4llm-bin "$BASH4LLM_BIN" --artifact-dir "$sub_b" --input-text "$stim_b" )
+      [ -n "$PROVIDER" ] && { t_opts_a+=( --provider "$PROVIDER" ); t_opts_b+=( --provider "$PROVIDER" ); }
       [ -n "$MODEL_ID" ] && { t_opts_a+=( --model "$MODEL_ID" ); t_opts_b+=( --model "$MODEL_ID" ); }
       [ -n "$VAULT_PASS" ] && { t_opts_a+=( --vault-ctx "$VAULT_PASS" ); t_opts_b+=( --vault-ctx "$VAULT_PASS" ); }
       [ "$DRY_RUN_FLAG" -eq 1 ] && { t_opts_a+=( --dry-run ); t_opts_b+=( --dry-run ); }
@@ -259,11 +287,11 @@ run_single_test_unit() {
 
           local m_opts=(
             --bash4llm-bin "$BASH4LLM_BIN"
-            --provider "$PROVIDER"
             --artifact-dir "$sub_matrix_dir"
             --input-text "$target_prompt"
             --intended-sha256 "$expected_sha"
           )
+          [ -n "$PROVIDER" ] && m_opts+=( --provider "$PROVIDER" )
           [ -n "$MODEL_ID" ] && m_opts+=( --model "$MODEL_ID" )
           [ -n "$VAULT_PASS" ] && m_opts+=( --vault-ctx "$VAULT_PASS" )
           [ "$DRY_RUN_FLAG" -eq 1 ] && m_opts+=( --dry-run )
@@ -291,10 +319,10 @@ run_single_test_unit() {
 
         local t_adapter_opts=(
           --bash4llm-bin "$BASH4LLM_BIN"
-          --provider "$PROVIDER"
           --artifact-dir "$trial_base_dir"
           --input-text "$target_prompt"
         )
+        [ -n "$PROVIDER" ] && t_adapter_opts+=( --provider "$PROVIDER" )
         [ -n "$MODEL_ID" ] && t_adapter_opts+=( --model "$MODEL_ID" )
         [ -n "$expected_sha" ] && t_adapter_opts+=( --intended-sha256 "$expected_sha" )
         [ -n "$VAULT_PASS" ] && t_adapter_opts+=( --vault-ctx "$VAULT_PASS" )
@@ -310,6 +338,9 @@ run_single_test_unit() {
     printf '  - Esecuzione completata per %d cicli di prova.          \n' "$N_TRIALS"
   fi
 
+  # ---------------------------------------------------------------------------
+  # [4/6] CALCOLO STATISTICO (cdp_stats.py)
+  # ---------------------------------------------------------------------------
   printf 'cdp_run: [4/6] Calcolo metriche statistiche (cdp_stats.py)...\n'
   local metrics_summary_file="$run_dir/metrics_summary.json"
 
@@ -347,6 +378,9 @@ run_single_test_unit() {
     "$PYTHON_BIN" "$METROLOGY_DIR/cdp_stats.py" --out "$metrics_summary_file" binomial --k "$k_success" --n "$n_valid"
   fi
 
+  # ---------------------------------------------------------------------------
+  # [5/6] DECISION DAG & CLASSIFICAZIONE EPISTEMICA DEI CLAIM
+  # ---------------------------------------------------------------------------
   printf 'cdp_run: [5/6] Esecuzione Decision DAG deterministico...\n'
   local claim_class_file="$run_dir/claim_classification.json"
   "$PYTHON_BIN" "$METROLOGY_DIR/claim_classifier.py" \
@@ -356,6 +390,9 @@ run_single_test_unit() {
     --regime "$REGIME" \
     --out "$claim_class_file"
 
+  # ---------------------------------------------------------------------------
+  # [6/6] COMPILAZIONE SCHEDA MASTER SOTU v2.3
+  # ---------------------------------------------------------------------------
   printf 'cdp_run: [6/6] Compilazione Scheda Master SOTU v2.3...\n'
   local run_manifest_file="$run_dir/run_manifest.json"
   local sotu_report_file="$run_dir/SOTU_MASTER_REPORT.md"
@@ -364,17 +401,25 @@ run_single_test_unit() {
   if [ "${#trial_meta_files[@]}" -gt 0 ] && [ -f "${trial_meta_files[0]}" ]; then
     sample_dag_file="${trial_meta_files[0]}"
   else
-    printf '{"provenance_dag":{}, "audit_trail":{}}\n' > "$sample_dag_file"
+    printf '{"sut":{"provider":"UNRESOLVED","model_id":"UNRESOLVED"}, "provenance_dag":{}, "audit_trail":{}}\n' > "$sample_dag_file"
   fi
+
+  # Estrazione reale dei metadati SUT osservati dal trial
+  local obs_provider obs_model
+  obs_provider="$(jq -r '.sut.provider // "UNRESOLVED"' "$sample_dag_file" 2>/dev/null || echo "UNRESOLVED")"
+  obs_model="$(jq -r '.sut.model_id // "UNRESOLVED"' "$sample_dag_file" 2>/dev/null || echo "UNRESOLVED")"
+
+  [ "$obs_provider" = "UNRESOLVED" ] && [ -n "$PROVIDER" ] && obs_provider="$PROVIDER"
+  [ "$obs_model" = "UNRESOLVED" ] && [ -n "$MODEL_ID" ] && obs_model="$MODEL_ID"
 
   jq -c -n \
     --arg proto "CDP-v2.3 / SOP-v2.3" \
     --arg ses_id "$run_id" \
     --arg t_id "$target_test" \
     --arg reg "$REGIME" \
-    --arg prov "$PROVIDER" \
-    --arg ep "$ENDPOINT_URL" \
-    --arg mod "${MODEL_ID:-default}" \
+    --arg prov "$obs_provider" \
+    --arg ep "${ENDPOINT_URL:-NOT_OBSERVED}" \
+    --arg mod "$obs_model" \
     --slurpfile telem "$telem_json_file" \
     --slurpfile dag_sample "$sample_dag_file" \
     '{
@@ -384,10 +429,14 @@ run_single_test_unit() {
       regime: $reg,
       sut_formal_tuple: {
         provider: $prov,
-        endpoint_url: $ep,
+        endpoint_url: (if $ep == "NOT_OBSERVED" then null else $ep end),
         model_id: $mod,
-        declared_runtime: "cloud-api",
-        sampling: { temperature: 1.0, max_tokens: 4096, stream_mode: false }
+        declared_runtime: "external-cli-wrapper",
+        sampling: {
+          temperature: ($dag_sample[0].sut.temperature // null),
+          max_tokens: ($dag_sample[0].sut.max_tokens // null),
+          stream_mode: false
+        }
       },
       host_telemetry: ($telem[0] // {}),
       provenance_dag: ($dag_sample[0].provenance_dag // {}),
@@ -406,10 +455,10 @@ run_single_test_unit() {
   fi
 
   local final_ev_vector final_ev_status final_id_status final_verdict
-  final_ev_vector="$(jq -r '.final_evidence_vector // "E = < O3, C1, R1, S1 >"' "$claim_class_file")"
-  final_ev_status="$(jq -r '.final_evidence_status // "SUPPORTED"' "$claim_class_file")"
-  final_id_status="$(jq -r '.final_identification_status // "IDENTIFIED_WITHIN_OBSERVED_BOUNDARY"' "$claim_class_file")"
-  final_verdict="$(jq -r '.final_verdict // "PERFECT_CONFORMANCE_OBSERVED"' "$claim_class_file")"
+  final_ev_vector="$(jq -r '.final_evidence_vector // "NOT_OBSERVED"' "$claim_class_file")"
+  final_ev_status="$(jq -r '.final_evidence_status // "NOT_OBSERVED"' "$claim_class_file")"
+  final_id_status="$(jq -r '.final_identification_status // "NOT_OBSERVED"' "$claim_class_file")"
+  final_verdict="$(jq -r '.final_verdict // "NOT_OBSERVED"' "$claim_class_file")"
 
   printf '\n================================================================================\n'
   printf ' REFERTO ESECUTIVO SOTU v2.3: %s\n' "$target_test"
@@ -424,7 +473,7 @@ run_single_test_unit() {
 
 printf '================================================================================\n'
 printf ' CDP/SOP v2.3 METROLOGY HARNESS — AVVIO ESECUZIONE SPERIMENTALE\n'
-printf ' SUT Provider: %-15s | Mode: %-15s\n' "$PROVIDER" "$([ "$DRY_RUN_FLAG" -eq 1 ] && echo "DRY-RUN (Simulated)" || echo "LIVE NETWORK")"
+printf ' SUT Invocator: %-15s | Mode: %-15s\n' "$(basename "$BASH4LLM_BIN")" "$([ "$DRY_RUN_FLAG" -eq 1 ] && echo "DRY-RUN (Simulated)" || echo "LIVE NETWORK")"
 printf '================================================================================\n'
 
 case "$TEST_ID" in
