@@ -9,152 +9,208 @@
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
 # Contact: opensource@cevangel.anonaddy.me
 # ======================================
-# Requirements: coreutils (cat/less)
+# Requirements: coreutils (cat / less)
 
 ========================================
-    CHANNEL DISCOVERY PROTOCOL (CDP/SOP v2.3) — GUIDA OPERATIVA & COMANDI
+CHANNEL DISCOVERY PROTOCOL (CDP/SOP v2.3)
+GUIDA OPERATIVA E MANUALE DEI COMANDI
 ========================================
 
 SINTASSI GENERALE:
   cdp <COMANDO> [OPZIONI]
 
 ========================================
-1. COMANDI PRINCIPALI DI ESECUZIONE E REFERTAZIONE
+FLUSSO OPERATIVO STANDARD (QUICK START)
+========================================
+
+Passo 1. Calibrazione Iniziale (Obbligatoria):
+  $ cdp run RUN0
+
+Passo 2. Esecuzione Batteria o Singolo Test:
+  $ cdp run ALL_FOUNDATIONAL
+  $ cdp run T01 --regime pilot
+  $ cdp run T12 --mde 100.0
+
+Passo 3. Consultazione Referto SOTU Master:
+  $ cdp show latest
+
+Passo 4. Compilazione Dossier di Campagna:
+  $ cdp summary
+
+========================================
+1. GATEWAY CLI PRINCIPALE (cdp)
 ========================================
 
   cdp run <TEST_ID> [OPZIONI]
-      Esegue un test sperimentale o una batteria di test.
-      Target ammessi:
-        RUN0             : Calibrazione Osservabilita V3 (Obbligatoria iniziale)
-        T01              : Transport Integrity & Canary Preservation (Ladder OFAT)
-        T02              : Whitespace & Control Boundary Preservation
-        T03              : Unicode Canonical & Compatibility Normalization (UAX #15)
-        T04              : Invisible & Format Characters (ZWSP, ZWNJ, BOM)
-        T05              : Cross-Turn State Recall Probe
-        T06              : Cross-Session Persistence Phenotype
-        T07              : Markup-Like User Data Interpretation
-        T08              : Escape Sequences & Output Transformation
-        T09              : Streaming Termination Protocol Characterization
-        T10              : Cross-System Phenomenological Replication
-        T11              : Token Accounting Discrepancy Probe
-        T12              : Paired Latency & Observed TTFT Difference (Design Appaiato)
-        T13              : Declared Prefix Caching Probe
-        T14              : Long-Context Needle Retrieval (Matrice L x D)
-        ALL_FOUNDATIONAL : Esegue in sequenza RUN0, T01, T02, T03, T04
-        ALL              : Esegue l'intera suite da RUN0 a T14
-
-      Opzioni di esecuzione:
-        --provider <NAME>      Provider target (es. groq, gemini, mistral, openrouter).
-                               Se omesso, delega alla configurazione attiva di bash4llm.
-        --model <MODEL_ID>     Model ID esplicito per l'esecuzione.
-                               Se omesso, delega al modello default di bash4llm.
-        --regime <pilot|conf>  Regime statistico: pilot (N=5) | confirmatory (N=20). Default: pilot.
-        --endpoint <URL>       Endpoint URL per stima telemetrica baseline RTT.
-        --mde <FLOAT>          Minima Differenza Rilevante in ms per T12 (default: 100.0).
-        --bash4llm-bin <PATH>  Percorso esplicito dell'eseguibile SUT (bash4llm).
-        --vault-ctx <PASS>     Passcode master per sblocco non interattivo del Vault OpenSSL.
-        --dry-run              Simulazione locale senza traffico HTTP di rete.
-        --debug                Preserva le directory sandbox temporanee per analisi.
+    Esegue una sessione di test formale.
+    Target: RUN0, T01..T14, ALL_FOUNDATIONAL, ALL.
+    Opzioni disponibili:
+      --provider <NAME>
+        Provider target (es. groq, gemini, mistral, openrouter). Se omesso, delega alla configurazione attiva di bash4llm.
+      --model <MODEL_ID>
+        Model ID esplicito per l'esecuzione. Se omesso, delega al default attivo di bash4llm.
+      --regime <pilot|confirmatory|R1|R2>
+        Regime sperimentale: pilot (N=5) | confirmatory (N=20). Default: pilot.
+      --endpoint <URL>
+        Endpoint URL per stima telemetrica baseline RTT.
+      --mde <FLOAT>
+        Minima Differenza Rilevante in ms per T12 (default: 100.0).
+      --bash4llm-bin <PATH>
+        Percorso esplicito dell'eseguibile SUT (bash4llm).
+      --vault-ctx <PASS>
+        Passcode master per sblocco in memoria del Vault OpenSSL.
+      --dry-run
+        Simulazione locale senza traffico HTTP di rete.
+      --debug
+        Preserva le sandbox temporanee per analisi forense.
 
   cdp summary [--out <FILE>]
-      Genera il Dossier di Campagna consolidato con il Quadro Sinottico
-      comparativo e le matrici/curve di decadimento per T14.
-      Default output: <WORKSPACE_DIR>/DOSSIER_CAMPAGNA.md
+    (Alias: dossier, synoptic)
+    Scansiona runs/ e genera il Dossier di Campagna con Quadro Sinottico e curve di decadimento T14.
+    Default: <WORKSPACE_DIR>/DOSSIER_CAMPAGNA.md
 
   cdp show [latest | RUN_ID | PERCORSO_FILE]
-      Visualizza con il visualizzatore di sistema il referto SOTU Master
-      (SOTU_MASTER_REPORT.md) dell'ultima sessione o di una sessione specifica.
+    (Alias: view)
+    Visualizza con il paginatore di sistema il referto SOTU Master (SOTU_MASTER_REPORT.md).
 
   cdp list [runs | tests]
-      Elenca le sessioni storiche archiviate in runs/ oppure il catalogo test.
+    runs: Elenca le sessioni storiche salvate in runs/.
+    tests: Elenca il catalogo dei test della suite.
 
-  cdp telemetry [ENDPOINT_URL | --endpoint <URL>]
-      Esegue la sonda telemetrica dell'ambiente host (hardware, kernel release,
-      locale, versioni interpreti/librerie) e calcola la mediana RTT di rete.
+  cdp telemetry [ENDPOINT_URL | --endpoint <URL>] [--out <FILE>] [--samples <N>] [--quiet]
+    Esegue la sonda ambientale sull'host (hardware, kernel, locale, versioni runtime) e misura la mediana RTT empirica.
 
-========================================
-2. UTILITY METROLOGICHE RAPIDE (ZERO-PIP STANDALONE)
-========================================
+  cdp stats <SOTTOCOMANDO> [OPZIONI]
+    Invocatore del motore statistico (cdp_stats.py):
+      binomial -k <K> -n <N> [--alpha <FLOAT>] [--out <FILE>]
+        Calcola intervallo esatto Clopper-Pearson 95% su distribuzione Beta.
+      paired-ttft --pairs-json <FILE> [--mde <MS>] [--alpha <FLOAT>] [--bootstrap-reps <N>] [--out <FILE>]
+        Analisi differenze appaiate TTFT (Student-t, Bootstrap, MDE per T12).
+      power --mde <DELTA_MIN> --pilot-sd <SD> [--power <FLOAT>] [--out <FILE>]
+        Power Analysis a priori per dimensionamento campione N in regime R2.
 
-  cdp stats binomial -k <K> -n <N> [--alpha <FLOAT>]
-      Calcola l'intervallo di confidenza esatto di Clopper-Pearson al 95%
-      su distribuzione Beta per k successi su N prove valide.
-
-  cdp stats paired-ttft --pairs-json <FILE> [--mde <MS>] [--alpha <FLOAT>]
-      Esegue l'analisi statistica delle differenze appaiate di latenza (TTFT)
-      con intervallo parametrico Student-t, Bootstrap percentile e test MDE (T12).
-
-  cdp stats power --mde <DELTA_MIN> --pilot-sd <SD_PILOTA> [--power <FLOAT>]
-      Esegue la Power Analysis a priori per dimensionare il campione N (Regime R2).
-
-  cdp unicode "<TESTO>"
-      Analisi della stringa: codepoints, categorie generali Unicode
-      e scomposizione nelle 4 forme normalizzate UAX #15 (NFC, NFD, NFKC, NFKD).
-      Supporta anche:
-        cdp unicode --file <PATH>
-        cdp unicode --compare <STR1> <STR2> [--form <NFC|NFD|NFKC|NFKD>]
-        cdp unicode --telemetry
-
-========================================
-3. AMMINISTRAZIONE E DIAGNOSTICA DEL WORKSPACE
-========================================
+  cdp unicode "<STRINGA>" [OPZIONI]
+    Invocatore del motore Unicode UAX #15 (uax_engine.py):
+      cdp unicode "<STRINGA>"
+        Decomposizione scalari, codepoint e forme normalizzate (NFC, NFD, NFKC, NFKD).
+      cdp unicode --file <PATH>
+        Analisi Unicode da file di testo.
+      cdp unicode --compare <S1> <S2> [--form <FORMA>]
+        Valutazione equivalenza M2a tra due stringhe.
+      cdp unicode --telemetry
+        Telemetria tabelle Unicode e versione Python.
 
   cdp status
-      Controlla l'integrita dei file, la disponibilita di bash4llm, il conteggio
-      delle sessioni e riapplica i permessi restrittivi di sicurezza (chmod 0700).
+    Verifica integrita dei file, presenza del wrapper SUT (bash4llm), conteggio sessioni e hardening permessi (0700).
 
   cdp clean [tmp | all]
-      tmp : Rimuove le sandbox temporanee residue.
-      all : Richiede conferma per eliminare l'intero storico delle sessioni in runs/.
+    tmp: Elimina le sandbox temporanee residue.
+    all: Elimina l'intero archivio delle sessioni in runs/ (richiede conferma).
 
   cdp -?, -h, --help, help
-      Mostra questo manuale di istruzioni.
+    Visualizza questo manuale di riferimento.
 
 ========================================
-4. LE INFORMAZIONI PIÙ IMPORTANTI DA SAPERE PER L'UTENTE (GUIDA EPISTEMICA)
+2. CATALOGO TEST CDP/SOP v2.3
 ========================================
 
-1. IL PRINCIPIO AUREO DI CONSERVATIVITÀ EPISTEMICA:
+  RUN0: Calibrazione Osservabilita V3 (Obbligatoria)
+  T01 : Transport Integrity & Canary Preservation (Ladder OFAT)
+  T02 : Whitespace & Control Boundary Preservation (M1-scalar)
+  T03 : Unicode Normalization Matrix UAX #15 (M2a NFC/NFD/NFKD)
+  T04 : Invisible, Format & Boundary Characters (ZWSP/ZWNJ/BOM)
+  T05 : Cross-Turn State Recall Probe (M1-scalar)
+  T06 : Cross-Session Persistence Phenotype (Controllo Negativo)
+  T07 : Markup-Like User Data Interpretation (JSON/XML/Fences)
+  T08 : Escape Sequences & Output Transformation (M1 / M3)
+  T09 : Streaming Termination Protocol Characterization
+  T10 : Cross-System Phenomenological Replication Matrix
+  T11 : Token Accounting Discrepancy Probe (Delta_doc)
+  T12 : Paired Latency & Observed TTFT Difference (Design Appaiato)
+  T13 : Declared Prefix Caching Probe (Metadato API)
+  T14 : Long-Context Needle Retrieval (Matrice L x D)
+
+  Macro-Batterie:
+    ALL_FOUNDATIONAL : Esegue in sequenza RUN0, T01, T02, T03, T04.
+    ALL              : Esegue l'intera suite da RUN0 a T14.
+
+========================================
+3. MODULI STANDALONE (CLI DIRETTA)
+========================================
+
+  cdp_run.sh
+    Orchestratore master di esecuzione test.
+    Uso: ./cdp_run.sh --test <ID> [--regime <REGIME>] [--provider <NAME>] [--model <ID>] [--endpoint <URL>] [--mde <MS>] [--bash4llm-bin <PATH>] [--vault-ctx <PASS>] [--dry-run] [--debug]
+
+  core/env_telemetry.sh
+    Sonda telemetrica ambientale e baseline RTT.
+    Uso: bash core/env_telemetry.sh [--endpoint <URL>] [--out <FILE>] [--samples <N>] [--quiet]
+
+  core/ofat_builder.py
+    Generatore deterministico di stimoli OFAT e canary CSPRNG.
+    Uso: python3 core/ofat_builder.py --test <ID> [--step <STEP>] [--nonce <HEX>] [--depth <FLOAT>] [--length-k <INT>] [--format <json|raw>] [--out <FILE>]
+
+  core/sut_adapter.sh
+    Wrapper SUT e adapter runtime per invocazione e introspezione reale.
+    Uso: bash core/sut_adapter.sh --bash4llm-bin <PATH> --artifact-dir <DIR> [--provider <NAME>] [--model <ID>] [--temperature <FLOAT>] [--max-tokens <INT>] [--system-prompt <STR>] [--input-text <STR>] [--input-file <PATH>] [--json-input <JSON>] [--intended-sha256 <HEX>] [--vault-ctx <PASS>] [--dry-run] [--debug]
+
+  metrology/cdp_stats.py
+    Motore statistico metrologico Clopper-Pearson, Paired TTFT e Power Analysis.
+    Uso:
+      python3 metrology/cdp_stats.py binomial -k <K> -n <N> [--alpha <FLOAT>] [--out <FILE>]
+      python3 metrology/cdp_stats.py paired-ttft --pairs-json <FILE> [--mde <MS>] [--alpha <FLOAT>] [--bootstrap-reps <N>] [--out <FILE>]
+      python3 metrology/cdp_stats.py power --mde <DELTA_MIN> --pilot-sd <SD> [--power <FLOAT>] [--out <FILE>]
+
+  metrology/claim_classifier.py
+    Motore deterministico Decision DAG e ruling differenziale H1-H5.
+    Uso: python3 metrology/claim_classifier.py [--trials-dir <DIR>] [--trial-json <FILE>] [--stats-json <FILE>] [--test-id <ID>] [--criterion <STR>] [--regime <STR>] [--out <FILE>]
+
+  metrology/uax_engine.py
+    Motore di analisi Unicode UAX #15 e conformita M2a.
+    Uso: python3 metrology/uax_engine.py [--text <STR>] [--file <PATH>] [--compare <S1> <S2>] [--form <NFC|NFD|NFKC|NFKD>] [--telemetry] [--out <FILE>]
+
+  reporters/sotu_master.py
+    Compilatore Scheda Master SOTU v2.3 (Quadruplet Rule).
+    Uso: python3 reporters/sotu_master.py [--run-dir <DIR>] [--manifest <FILE>] [--classification <FILE>] [--metrics <FILE>] [--trial-json <FILE>] [--out <FILE>]
+
+  reporters/campaign_dashboard.py
+    Compilatore Dossier di Campagna e Matrice Decadimento T14.
+    Uso: python3 reporters/campaign_dashboard.py [--runs-dir <DIR>] [--out <FILE>]
+
+========================================
+4. GUIDA EPISTEMICA E REGOLE FORMALI (CDP/SOP v2.3)
+========================================
+
+1. PRINCIPIO AUREO DI CONSERVATIVITÀ EPISTEMICA:
    "Strength(Claim_reported) <= Strength(Evidence_observed)"
-   Non e' mai consentito trarre conclusioni o attribuire certezze superiori a quanto
-   effettivamente intercettato e registrato dagli strumenti sul confine misurato.
+   Non e' mai consentito trarre conclusioni o attribuire certezze superiori a quanto effettivamente intercettato e registrato dagli strumenti sul confine misurato.
 
 2. PROXY != MECCANISMO:
-   La rilevazione di un effetto empirico (es. identita di testo, alterazione di stringa
-   o variazione di latenza) dimostra COSA e' accaduto sui confini osservati, ma NON
-   identifica automaticamente QUALE componente interno (pesi, vocabolario BPE,
-   system prompt del gateway o safety filter) lo abbia generato.
+   La rilevazione di un effetto empirico (es. identita di testo, alterazione di stringa o variazione di latenza) dimostra COSA e' accaduto sui confini osservati, ma NON identifica automaticamente QUALE componente interno (pesi, tokenizzatore BPE, system prompt o routing distribuito) lo abbia generato.
    I layer interni inaccessibili (S, M_raw) rimangono formalmente UNDERDETERMINED.
 
-3. IL POSTULATO DI NON-DIMOSTRAZIONE (NOT DETECTED != ABSENT):
+3. POSTULATO DI NON-DIMOSTRAZIONE (NOT DETECTED != ABSENT):
    "not(Obs(X)) /=> not(X)"
-   La mancata presenza di un carattere o struttura nell'output finale O attesta
-   esclusivamente che esso non e' stato rilevato in O, ma NON dimostra che tale
-   elemento non sia stato ricevuto o processato nei layer interni intermedi.
+   La mancata presenza di un carattere nell'output finale O attesta che esso non e' stato emesso in O, ma NON dimostra che non sia stato ricevuto o processato nei layer interni intermedi.
 
 4. LA TRIADE DEI CLAIM E IL DIVIETO DI SALTO INFERENZIALE:
    Claim A (Osservazione) /=> Claim B (Localizzazione) /=> Claim C (Meccanismo)
    - Claim A: "Rilevata stringa X su C_req_unicode" (Puro dato empirico).
    - Claim B: "La mutazione e' avvenuta nel client prima della rete" (Richiede V3-3).
-   - Claim C: "Il modello ha applicato una regola BPE" (Vietato senza Layer V5).
+   - Claim C: "Il modello ha applicato una specifica regola BPE" (Vietato senza Layer V5).
 
 5. MODALITÀ A (V3 ATTIVO) VS MODALITÀ B (BLACK-BOX PURA):
-   - Modalita A (Layer V3-3 Verificato): Cattura del payload di richiesta (C_req) e
-     risposta (C_resp). Consente di discriminare tra mutazioni Client-Side (H1a)
-     e trasformazioni Post-Client (H2..H5).
-   - Modalita B (V3-0a No-Capture): Osserva solo U -> O. Consente esclusivamente
-     claim comportamentali terminali (Vettore E = < O1, C0, R1, S1 >).
+   - Modalita A (Layer V3-3 Verificato): Cattura del payload di richiesta (C_req) e risposta (C_resp). Consente di discriminare mutazioni Client-Side (H1a) da trasformazioni Post-Client (H2..H5).
+   - Modalita B (V3-0a No-Capture): Osserva solo U -> O. Consente esclusivamente claim comportamentali terminali (Vettore E = < O1, C0, R1, S1 >).
 
 6. REGIMI STATISTICI E POTENZA DEL CAMPIONE:
-   - Regime Pilota R1 (N = 5): Utile per screening iniziale. Con k=5 successi,
-     il 95% CI esatto e' [0.4782, 1.0000] (non esclude tasso di errore reale fino al 52.2%).
-   - Regime Vincolato R2 (N >= 20..50): Campione dimensionato per escludere
-     falsi positivi con Margine di Errore MOE <= 0.05.
+   - Regime Pilota R1 (N = 5): Screening esplorativo rapido. Con k=5 successi, il 95% CI esatto e' [0.4782, 1.0000] (non esclude tasso di errore reale fino al 52.2%).
+   - Regime Vincolato R2 (N >= 20..50): Campione dimensionato via Power Analysis per escludere falsi positivi con Margine di Errore MOE <= 0.05.
 
-7. THE QUADRUPLET RULE (I 4 PILASTRI DI OGNI VERBALE SOTU):
-   Ogni referto deve contenere categoricamente:
-   - OSSERVAZIONE    : Fatti e byte misurati (digest SHA-256).
-   - INFERENZA       : Spazio delle ipotesi logiche aperte sotto criterio M.
-   - CONCLUSIONE     : Ipotesi escluse o supportate sotto il Vettore E.
-   - NON DETERMINATO : Esplicitazione dei layer e fenomeni non osservati.
+7. THE QUADRUPLET RULE (I 4 PILASTRI DI OGNI REFERTO SOTU v2.3):
+   Ogni referto generato contiene categoricamente:
+   - OSSERVAZIONE: Fatti e byte misurati (digest SHA-256 su confini U/C/O).
+   - INFERENZA: Spazio delle ipotesi logiche aperte sotto criterio M.
+   - CONCLUSIONE: Ipotesi escluse o supportate sotto il Vettore E.
+   - NON DETERMINATO: Esplicitazione rigorosa dei layer e fenomeni non osservati.
 ========================================
