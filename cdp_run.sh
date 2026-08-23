@@ -23,6 +23,7 @@
 #   [5/6] Decision DAG & classificazione epistemica (metrology/claim_classifier.py).
 #   [6/6] Compilazione Scheda Master SOTU v2.3 (reporters/sotu_master.py).
 #
+# Integra una palette cromatica semantica ANSI sicura (TTY-safe & NO_COLOR compliant).
 # Non sono presenti provider, modelli, endpoint o digest SHA-256 cablati:
 # ogni parametro viene propagato dinamicamente o rilevato a runtime dal SUT.
 # ==============================================================================
@@ -32,6 +33,51 @@ umask 077
 
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
+
+# Pre-parsing per intercettare flag --no-color
+if [ "$#" -gt 0 ]; then
+  for _arg in "$@"; do
+    if [ "$_arg" = "--no-color" ]; then
+      export NO_COLOR=1
+    fi
+  done
+  unset _arg
+fi
+
+# ==============================================================================
+# SOTTOSISTEMA COLORI ANSI SEMANTICO & SICURO (NO_COLOR & TTY-Safe)
+# ==============================================================================
+if [ -t 1 ] && [ "${TERM:-}" != "dumb" ] && [ -z "${NO_COLOR:-}" ]; then
+  C_RST=$'\e[0m'
+  C_BOLD=$'\e[1m'
+  C_DIM=$'\e[2m'
+  C_UNDERLINE=$'\e[4m'
+  C_INVERT=$'\e[7m'
+
+  # Colori Standard (Normali)
+  C_BLACK=$'\e[0;30m'
+  C_RED=$'\e[0;31m'
+  C_GREEN=$'\e[0;32m'
+  C_YELLOW=$'\e[0;33m'
+  C_BLUE=$'\e[0;34m'
+  C_MAGENTA=$'\e[0;35m'
+  C_CYAN=$'\e[0;36m'
+  C_WHITE=$'\e[0;37m'
+
+  # Colori Bold / High-Intensity
+  C_BBLACK=$'\e[1;30m'  # Dark Gray
+  C_BRED=$'\e[1;31m'
+  C_BGREEN=$'\e[1;32m'
+  C_BYELLOW=$'\e[1;33m'
+  C_BBLUE=$'\e[1;34m'
+  C_BMAGENTA=$'\e[1;35m'
+  C_BCYAN=$'\e[1;36m'
+  C_BWHITE=$'\e[1;37m'
+else
+  C_RST="" C_BOLD="" C_DIM="" C_UNDERLINE="" C_INVERT=""
+  C_BLACK="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_MAGENTA="" C_CYAN="" C_WHITE=""
+  C_BBLACK="" C_BRED="" C_BGREEN="" C_BYELLOW="" C_BBLUE="" C_BMAGENTA="" C_BCYAN="" C_BWHITE=""
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
 WORKSPACE_DIR="$SCRIPT_DIR"
@@ -90,6 +136,7 @@ Configurazione SUT (Se omesse, delegate alla configurazione attiva di bash4llm):
 Controlli di Esecuzione:
   --dry-run            Simulazione locale senza traffico HTTP.
   --debug              Preserva le sandbox temporanee per analisi forense.
+  --no-color           Disabilita l'emissione dei codici colore ANSI.
   -h, --help           Mostra questa guida ed esce.
 EOF
   exit 0
@@ -98,12 +145,12 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     --test)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --test richiede un ID\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --test richiede un ID%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       TEST_ID="$(printf '%s' "$2" | tr '[:lower:]' '[:upper:]')"
       shift 2
       ;;
     --regime)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --regime richiede un valore\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --regime richiede un valore%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       case "$2" in
         pilot|R1|R1_PILOT) REGIME="R1_PILOT"; N_TRIALS=5 ;;
         confirmatory|R2|R2_CONSTRAINED) REGIME="R2_CONSTRAINED"; N_TRIALS=20 ;;
@@ -112,32 +159,32 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --provider)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --provider richiede un nome\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --provider richiede un nome%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       PROVIDER="$2"
       shift 2
       ;;
     --model)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --model richiede un identificativo\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --model richiede un identificativo%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       MODEL_ID="$2"
       shift 2
       ;;
     --endpoint)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --endpoint richiede un URL\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --endpoint richiede un URL%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       ENDPOINT_URL="$2"
       shift 2
       ;;
     --mde)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --mde richiede un valore numerico\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --mde richiede un valore numerico%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       MDE_MS="$2"
       shift 2
       ;;
     --bash4llm-bin)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --bash4llm-bin richiede un percorso\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --bash4llm-bin richiede un percorso%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       BASH4LLM_BIN="$2"
       shift 2
       ;;
     --vault-ctx)
-      [ $# -ge 2 ] || { printf 'cdp_run: ERRORE: --vault-ctx richiede un passcode\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --vault-ctx richiede un passcode%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       VAULT_PASS="$2"
       shift 2
       ;;
@@ -149,11 +196,14 @@ while [ $# -gt 0 ]; do
       DEBUG_FLAG=1
       shift
       ;;
+    --no-color)
+      shift
+      ;;
     -h|--help)
       usage
       ;;
     *)
-      printf 'cdp_run: ERRORE: Opzione sconosciuta: %s\n' "$1" >&2
+      printf '%scdp_run: ERRORE: Opzione sconosciuta: %s%s\n' "${C_BRED}" "$1" "${C_RST}" >&2
       exit 2
       ;;
   esac
@@ -161,7 +211,7 @@ done
 
 # Validazione esistenza eseguibile SUT
 if [ -z "$BASH4LLM_BIN" ] || [ ! -f "$BASH4LLM_BIN" ]; then
-  printf 'cdp_run: ERRORE CRITICO: Eseguibile SUT non trovato. Specificare --bash4llm-bin <PATH>\n' >&2
+  printf '%scdp_run: ERRORE CRITICO: Eseguibile SUT non trovato. Specificare --bash4llm-bin <PATH>%s\n' "${C_BRED}" "${C_RST}" >&2
   exit 15
 fi
 
@@ -180,15 +230,16 @@ run_single_test_unit() {
   mkdir -p "$artifacts_dir" 2>/dev/null || true
   chmod 700 "$run_dir" "$artifacts_dir" 2>/dev/null || true
 
-  printf '\n+------------------------------------------------------------------------------+\n'
-  printf '| INIZIALIZZAZIONE TEST UNIT: %-48s |\n' "$target_test ($REGIME)"
-  printf '| Session Storage: %-59s |\n' "$run_id"
-  printf '+------------------------------------------------------------------------------+\n'
+  printf '\n%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}TEST UNIT: ${C_BGREEN}${target_test}${C_RST} (${C_CYAN}${REGIME}${C_RST})
+${C_BBLACK}Storage  : ${run_id}${C_RST}
+${C_BBLACK}----------------------------------------${C_RST}
+"
 
   # ---------------------------------------------------------------------------
   # [1/6] TELEMETRIA HOST & BASELINE RTT
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: [1/6] Acquisizione telemetria host e baseline RTT...\n'
+  printf 'cdp_run: %s[1/6]%s Acquisizione telemetria host e baseline RTT...\n' "${C_BBLUE}" "${C_RST}"
   local telem_json_file="$run_dir/host_telemetry.json"
   local telem_opts=( --out "$telem_json_file" --quiet )
   [ -n "$ENDPOINT_URL" ] && telem_opts+=( --endpoint "$ENDPOINT_URL" )
@@ -197,14 +248,14 @@ run_single_test_unit() {
   # ---------------------------------------------------------------------------
   # [2/6] GENERAZIONE STIMOLI OFAT & GROUND TRUTH METROLOGICA
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: [2/6] Generazione stimoli canonici via ofat_builder.py...\n'
+  printf 'cdp_run: %s[2/6]%s Generazione stimoli canonici via ofat_builder.py...\n' "${C_BMAGENTA}" "${C_RST}"
   local stimulus_meta_file="$run_dir/stimulus_meta.json"
   "$PYTHON_BIN" "$CORE_DIR/ofat_builder.py" --test "$target_test" --out "$stimulus_meta_file"
 
   # ---------------------------------------------------------------------------
   # [3/6] ESECUZIONE TRIAL SPERIMENTALI SUL SUT ADAPTER
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: [3/6] Esecuzione trial SUT...\n'
+  printf 'cdp_run: %s[3/6]%s Esecuzione trial SUT...\n' "${C_BCYAN}" "${C_RST}"
   local -a trial_meta_files=()
   local ttft_pairs_file="$run_dir/ttft_pairs.json"
   local -a latency_pairs_arr=()
@@ -329,19 +380,19 @@ run_single_test_unit() {
         [ "$DRY_RUN_FLAG" -eq 1 ] && t_adapter_opts+=( --dry-run )
         [ "$DEBUG_FLAG" -eq 1 ] && t_adapter_opts+=( --debug )
 
-        printf '  - Trial %02d/%02d in corso...\r' "$trial_idx" "$N_TRIALS"
+        printf '  - Trial %s%02d%s/%s%02d%s in corso...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
         bash "$CORE_DIR/sut_adapter.sh" "${t_adapter_opts[@]}" >/dev/null 2>&1 || true
         trial_meta_files+=( "$trial_base_dir/trial_metadata.json" )
         sleep 0.2 2>/dev/null || true
       fi
     done
-    printf '  - Esecuzione completata per %d cicli di prova.          \n' "$N_TRIALS"
+    printf '  - Esecuzione completata per %s%d%s cicli di prova.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
   fi
 
   # ---------------------------------------------------------------------------
   # [4/6] CALCOLO STATISTICO (cdp_stats.py)
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: [4/6] Calcolo metriche statistiche (cdp_stats.py)...\n'
+  printf 'cdp_run: %s[4/6]%s Calcolo metriche statistiche (cdp_stats.py)...\n' "${C_BYELLOW}" "${C_RST}"
   local metrics_summary_file="$run_dir/metrics_summary.json"
 
   if [ "$target_test" = "T12" ]; then
@@ -360,7 +411,7 @@ run_single_test_unit() {
           u_sha_t="$(jq -r '.provenance_dag.stimulus_intended_sha256 // empty' "$t_file" 2>/dev/null || echo "")"
           out_sha_t="$(jq -r '.provenance_dag.output_parsed_sha256 // empty' "$t_file" 2>/dev/null || echo "")"
           trial_art_dir_t="$(dirname "$t_file")"
-          exp_canary="$(jq -r '.expected_canary // .needle // .target.expected_canary // .target.expected_suffix // empty' "$trial_art_dir_t/stimulus.json" 2>/dev/null || true)"
+          exp_canary="$(jq -r '.expected_canary // .needle // .target.expected_canary // .target.expected_suffix // empty' "$trial_art_dir_t/stimulus.json" 2>/dev/null || jq -r '.expected_canary // .needle // .target.expected_canary // .target.expected_suffix // empty' "$stimulus_meta_file" 2>/dev/null || true)"
 
           if [ -n "$u_sha_t" ] && [ "$u_sha_t" = "$out_sha_t" ]; then
             k_success=$((k_success + 1))
@@ -381,7 +432,7 @@ run_single_test_unit() {
   # ---------------------------------------------------------------------------
   # [5/6] DECISION DAG & CLASSIFICAZIONE EPISTEMICA DEI CLAIM
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: [5/6] Esecuzione Decision DAG deterministico...\n'
+  printf 'cdp_run: %s[5/6]%s Esecuzione Decision DAG deterministico...\n' "${C_BMAGENTA}" "${C_RST}"
   local claim_class_file="$run_dir/claim_classification.json"
   "$PYTHON_BIN" "$METROLOGY_DIR/claim_classifier.py" \
     --trials-dir "$artifacts_dir" \
@@ -393,7 +444,7 @@ run_single_test_unit() {
   # ---------------------------------------------------------------------------
   # [6/6] COMPILAZIONE SCHEDA MASTER SOTU v2.3
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: [6/6] Compilazione Scheda Master SOTU v2.3...\n'
+  printf 'cdp_run: %s[6/6]%s Compilazione Scheda Master SOTU v2.3...\n' "${C_BGREEN}" "${C_RST}"
   local run_manifest_file="$run_dir/run_manifest.json"
   local sotu_report_file="$run_dir/SOTU_MASTER_REPORT.md"
 
@@ -454,27 +505,35 @@ run_single_test_unit() {
     cp -f "$sotu_report_file" "$run_dir/calibration_run0.md"
   fi
 
-  local final_ev_vector final_ev_status final_id_status final_verdict
+  local final_ev_vector final_ev_status final_id_status final_verdict verdict_color
   final_ev_vector="$(jq -r '.final_evidence_vector // "NOT_OBSERVED"' "$claim_class_file")"
   final_ev_status="$(jq -r '.final_evidence_status // "NOT_OBSERVED"' "$claim_class_file")"
   final_id_status="$(jq -r '.final_identification_status // "NOT_OBSERVED"' "$claim_class_file")"
   final_verdict="$(jq -r '.final_verdict // "NOT_OBSERVED"' "$claim_class_file")"
 
-  printf '\n================================================================================\n'
-  printf ' REFERTO ESECUTIVO SOTU v2.3: %s\n' "$target_test"
-  printf '================================================================================\n'
-  printf '  - Esito Finale Validazione : %s\n' "$final_verdict"
-  printf '  - Evidence Status          : %s\n' "$final_ev_status"
-  printf '  - Identification Status    : %s\n' "$final_id_status"
-  printf '  - Vettore di Evidenza (E)  : %s\n' "$final_ev_vector"
-  printf '  - Report Completo Salvato  : %s\n' "$sotu_report_file"
-  printf '================================================================================\n\n'
+  case "$final_verdict" in
+    *PERFECT*|*CONFORMANT*) verdict_color="${C_BGREEN}" ;;
+    *VARIANCE*|*DIVERGENCE*) verdict_color="${C_BYELLOW}" ;;
+    *FAILED*|*INVALID*) verdict_color="${C_BRED}" ;;
+    *) verdict_color="${C_BCYAN}" ;;
+  esac
+
+  printf '\n%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}REFERTO ESECUTIVO SOTU v2.3: ${C_BGREEN}${target_test}${C_RST}
+${C_BMAGENTA}========================================${C_RST}
+  - Esito Validazione : ${verdict_color}${final_verdict}${C_RST}
+  - Evidence Status   : ${C_BOLD}${C_BWHITE}${final_ev_status}${C_RST}
+  - Identification    : ${C_BOLD}${C_BWHITE}${final_id_status}${C_RST}
+  - Vettore Evidenza  : ${C_BYELLOW}${final_ev_vector}${C_RST}
+  - Report Salvato in : ${C_BCYAN}${sotu_report_file}${C_RST}
+${C_BMAGENTA}========================================${C_RST}\n\n"
 }
 
-printf '================================================================================\n'
-printf ' CDP/SOP v2.3 METROLOGY HARNESS — AVVIO ESECUZIONE SPERIMENTALE\n'
-printf ' SUT Invocator: %-15s | Mode: %-15s\n' "$(basename "$BASH4LLM_BIN")" "$([ "$DRY_RUN_FLAG" -eq 1 ] && echo "DRY-RUN (Simulated)" || echo "LIVE NETWORK")"
-printf '================================================================================\n'
+printf '%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}CDP/SOP v2.3 METROLOGY HARNESS${C_RST}
+SUT Invocator : ${C_BGREEN}$(basename "$BASH4LLM_BIN")${C_RST}
+Execution Mode: ${C_BOLD}$([ "$DRY_RUN_FLAG" -eq 1 ] && echo "${C_BYELLOW}DRY-RUN (Simulato)" || echo "${C_BGREEN}LIVE NETWORK")${C_RST}
+${C_BMAGENTA}========================================${C_RST}\n"
 
 case "$TEST_ID" in
   ALL_FOUNDATIONAL)
