@@ -12,6 +12,22 @@
 # Contact: opensource@cevangel.anonaddy.me
 # ==============================================================================
 # Requirements: python (>=3.10), strictly standard library (zero-pip dependencies)
+#
+# ==============================================================================
+# GUIDA ARCHITETTURALE PER SVILUPPATORI (SUT / Invocator Agnostic):
+# ==============================================================================
+# Questo modulo implementa il Decision DAG deterministico per la classificazione
+# epistemica dei claim e la diagnosi differenziale delle ipotesi causali (H1-H5).
+# 
+# Riceve in input gli artefatti metrologici formalizzati generati dall'adapter
+# (trial_metadata.json) e dal motore statistico (metrics_summary.json):
+#   - Valuta i confini di osservabilita' raggiunti (O0..O3).
+#   - Genera il Vettore Formale di Evidenza: E = < O_x, C_x, R_x, S_x >.
+#   - Applica il principio epistemico "Strength(Claim) <= Strength(Evidence)"
+#     e "Proxy != Meccanismo" (H2-H5 UNDERDETERMINED su black-box API).
+#   - Integra determinismo statistico: il verdetto di sessione riflette
+#     l'autorita' formale di metrics_summary.json (Clopper-Pearson / Paired TTFT).
+# ==============================================================================
 
 import argparse
 import json
@@ -22,11 +38,12 @@ from typing import Any, Dict, List, Optional
 
 class ClaimClassifier:
     """
-    Motore Deterministico di Classificazione dei Claim e Diagnosi Differenziale.
+    Motore deterministico di classificazione dei claim metrologici e diagnosi differenziale.
     """
 
     @staticmethod
     def format_evidence_vector(o_level: str, c_level: str, r_level: str, s_level: str) -> str:
+        """Formatta la quadrupla canonica del vettore di evidenza E."""
         return f"E = < {o_level}, {c_level}, {r_level}, {s_level} >"
 
     @classmethod
@@ -36,6 +53,9 @@ class ClaimClassifier:
         comparison_criterion: str = "M1-scalar",
         regime: str = "R1_PILOT"
     ) -> Dict[str, Any]:
+        """
+        Valuta un singolo trial sperimentale sulla base del DAG di provenienza e dei predicati V3.
+        """
         eval_block = trial_metadata.get("evaluation", {})
         audit_block = trial_metadata.get("audit_trail", {})
         dag_block = trial_metadata.get("provenance_dag", {})
@@ -50,7 +70,7 @@ class ClaimClassifier:
 
         r_scope = "R1" if "R1" in regime else ("R2" if "R2" in regime else "R0")
 
-        # CASO 1: TRIAL INVALIDO
+        # CASO 1: TRIAL INVALIDO O FALLITO
         if trial_class in ["INVALID_STIMULUS", "INVALID_ENVIRONMENT", "FAILED_TRIAL"]:
             return {
                 "verdict_status": "INVALID",
@@ -65,7 +85,7 @@ class ClaimClassifier:
                     "H4_model_core": "NOT DETERMINED",
                     "H5_post_render": "NOT DETERMINED"
                 },
-                "epistemic_notes": "Trial nullo per anomalie ambientali o di stimolo pre-invio."
+                "epistemic_notes": "Trial non valido a causa di anomalie ambientali, di stimolo o fallimento SUT."
             }
 
         # CASO 2: MODALITÀ B (Black-Box Pura / V3 Non Catturato)
@@ -88,7 +108,7 @@ class ClaimClassifier:
                     },
                     "epistemic_notes": (
                         "Relazione comportamentale U -> O osservata in Modalita B. "
-                        "Nessuna asserzione di localizzazione o meccanismo e' ammessa."
+                        "Nessuna asserzione di localizzazione o meccanismo interno e' formalmente ammessa."
                     )
                 }
             else:
@@ -99,7 +119,7 @@ class ClaimClassifier:
                     "observed_boundary": "O0",
                     "evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
                     "hypotheses_evaluation": {},
-                    "epistemic_notes": "Output orfano o non associabile univocamente all'invocazione SUT."
+                    "epistemic_notes": "Output orfano o non associabile univocamente alla sessione di prova."
                 }
 
         # CASO 3: MODALITÀ A (Layer V3-3 Verificato sul Confine Applicativo)
@@ -122,7 +142,7 @@ class ClaimClassifier:
                     "H4_model_core": "NOT EVALUATED",
                     "H5_post_render": "NOT EVALUATED"
                 },
-                "epistemic_notes": "Mutazione localizzata prima della trasmissione in rete (H1a SUPPORTED)."
+                "epistemic_notes": "Mutazione localizzata nel software client prima della trasmissione in rete (H1a SUPPORTED)."
             }
 
         # Sottocaso 3B: Trasmissione Integra su C_req (U == C_req_unicode)
@@ -141,7 +161,7 @@ class ClaimClassifier:
                         "H4_model_core": "UNDERDETERMINED (M_raw inaccessibile)",
                         "H5_post_render": "UNDERDETERMINED (Proxy != Meccanismo)"
                     },
-                    "epistemic_notes": "Preservazione integrale sui confini osservati. Layer interni UNDERDETERMINED."
+                    "epistemic_notes": "Preservazione integrale sui confini osservati. Layer interni strutturalmente UNDERDETERMINED."
                 }
             else:
                 return {
@@ -164,10 +184,10 @@ class ClaimClassifier:
             "verdict_status": "INDETERMINATE",
             "evidence_status": "NOT SUPPORTED",
             "identification_status": "NOT IDENTIFIED",
-            "observed_boundary": "O3",
-            "evidence_vector": cls.format_evidence_vector("O3", "C0", r_scope, "S1"),
+            "observed_boundary": "O0",
+            "evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
             "hypotheses_evaluation": {},
-            "epistemic_notes": "Stato non classificabile."
+            "epistemic_notes": "Stato non classificabile dai dati di telemetria."
         }
 
     @classmethod
@@ -179,23 +199,27 @@ class ClaimClassifier:
         comparison_criterion: str = "M1-scalar",
         regime: str = "R1_PILOT"
     ) -> Dict[str, Any]:
+        """
+        Sintetizza l'intera sessione di test aggregando i singoli trial ed il sommario statistico.
+        """
         n_total = len(trials_evaluations)
+        r_scope = "R1" if "R1" in regime else ("R2" if "R2" in regime else "R0")
+
         if n_total == 0:
             return {
                 "test_id": test_id,
-                "status": "NO_TRIALS_RECORDED",
-                "final_evidence_vector": "E = < O0, C0, R0, S0 >"
+                "session_regime": regime,
+                "final_verdict": "NO_TRIALS_RECORDED",
+                "final_evidence_status": "NOT SUPPORTED",
+                "final_identification_status": "NOT IDENTIFIED",
+                "final_evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
+                "conclusion_summary": "Nessun trial registrato per la sessione."
             }
 
-        n_valid = sum(1 for t in trials_evaluations if t["verdict_status"] not in ["INVALID", "OUTPUT_OBSERVED_UNATTRIBUTED"])
-        # Supporta sia Modalita A (CONFORMANT_REPRODUCTION) che Modalita B (VALID_BEHAVIORAL_ONLY con SUPPORTED)
-        n_conformant = sum(1 for t in trials_evaluations if t["verdict_status"] in ["CONFORMANT_REPRODUCTION", "VALID_BEHAVIORAL_ONLY"] and t.get("evidence_status") == "SUPPORTED")
-        n_pre_client_mut = sum(1 for t in trials_evaluations if t["verdict_status"] == "LOCAL_PRE_TRANSPORT_MUTATION")
-        n_post_client_mut = sum(1 for t in trials_evaluations if t["verdict_status"] == "POST_CLIENT_TRANSFORMATION")
+        n_valid = sum(1 for t in trials_evaluations if t.get("verdict_status") not in ["INVALID", "OUTPUT_OBSERVED_UNATTRIBUTED"])
+        n_pre_client_mut = sum(1 for t in trials_evaluations if t.get("verdict_status") == "LOCAL_PRE_TRANSPORT_MUTATION")
 
-        r_scope = "R1" if "R1" in regime else ("R2" if "R2" in regime else "R0")
-
-        # T12: TEST APPAIATO TTFT
+        # T12: TEST APPAIATO TTFT (Grandezza Continua M4)
         if test_id == "T12" and stats_summary:
             mde_eval = stats_summary.get("mde_relevance_evaluation", {})
             is_relevant = mde_eval.get("is_practically_relevant", False)
@@ -215,7 +239,7 @@ class ClaimClassifier:
                 final_ev_status = "NOT SUPPORTED"
                 final_id_status = "NOT IDENTIFIED"
                 final_vector = cls.format_evidence_vector("O3", "C1", r_scope, "S1")
-                conclusion_txt = "Nessuna differenza sistematica riscontrata nel TTFT osservato."
+                conclusion_txt = "Nessuna differenza sistematica riscontrata nel TTFT osservato tra le due condizioni."
 
             return {
                 "test_id": test_id,
@@ -244,10 +268,36 @@ class ClaimClassifier:
                 "final_evidence_status": "NOT SUPPORTED",
                 "final_identification_status": "NOT IDENTIFIED",
                 "final_evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
-                "conclusion_summary": "Tutti i trial della sessione sono risultati non validi."
+                "conclusion_summary": "Tutti i trial della sessione sono risultati invalidi o non attribuibili."
             }
 
-        if n_conformant == n_valid:
+        # Determinazione del tasso di conformita ORR_b con priorita al sommario statistico formale
+        orr_b: float = 0.0
+        if stats_summary and "point_estimate_ORR_b" in stats_summary:
+            orr_b = float(stats_summary["point_estimate_ORR_b"])
+        else:
+            n_conformant_raw = sum(1 for t in trials_evaluations if t.get("verdict_status") in ["CONFORMANT_REPRODUCTION", "VALID_BEHAVIORAL_ONLY"] and t.get("evidence_status") == "SUPPORTED")
+            orr_b = round(n_conformant_raw / float(n_valid), 4)
+
+        if n_pre_client_mut == n_valid:
+            return {
+                "test_id": test_id,
+                "session_regime": regime,
+                "comparison_criterion": comparison_criterion,
+                "sample_size_valid": n_valid,
+                "point_estimate_ORR_b": 0.0,
+                "final_verdict": "CLIENT_SIDE_TRANSFORMATION_CONFIRMED",
+                "final_evidence_status": "SUPPORTED",
+                "final_identification_status": "IDENTIFIED_WITHIN_OBSERVED_BOUNDARY",
+                "final_evidence_vector": cls.format_evidence_vector("O3", "C1", r_scope, "S3"),
+                "hypotheses_ruling": {
+                    "H1a_client_mutation": "SUPPORTED / IDENTIFIED_DIRECT",
+                    "H2_to_H5_internal": "NOT APPLICABLE"
+                },
+                "conclusion_summary": "Trasformazione localizzata nel percorso U -> C_req (H1a SUPPORTED)."
+            }
+
+        if orr_b == 1.0 and n_pre_client_mut == 0:
             return {
                 "test_id": test_id,
                 "session_regime": regime,
@@ -268,31 +318,13 @@ class ClaimClassifier:
                 )
             }
 
-        if n_pre_client_mut == n_valid:
+        if orr_b == 0.0 and n_pre_client_mut == 0:
             return {
                 "test_id": test_id,
                 "session_regime": regime,
                 "comparison_criterion": comparison_criterion,
                 "sample_size_valid": n_valid,
-                "point_estimate_ORR_b": 1.0,
-                "final_verdict": "CLIENT_SIDE_TRANSFORMATION_CONFIRMED",
-                "final_evidence_status": "SUPPORTED",
-                "final_identification_status": "IDENTIFIED_WITHIN_OBSERVED_BOUNDARY",
-                "final_evidence_vector": cls.format_evidence_vector("O3", "C1", r_scope, "S3"),
-                "hypotheses_ruling": {
-                    "H1a_client_mutation": "SUPPORTED / IDENTIFIED_DIRECT",
-                    "H2_to_H5_internal": "NOT APPLICABLE"
-                },
-                "conclusion_summary": "Trasformazione localizzata nel percorso U -> C_req (H1a SUPPORTED)."
-            }
-
-        if n_post_client_mut == n_valid:
-            return {
-                "test_id": test_id,
-                "session_regime": regime,
-                "comparison_criterion": comparison_criterion,
-                "sample_size_valid": n_valid,
-                "point_estimate_ORR_b": 1.0,
+                "point_estimate_ORR_b": 0.0,
                 "final_verdict": "POST_CLIENT_TRANSFORMATION_CONFIRMED",
                 "final_evidence_status": "SUPPORTED (Divergence Observed)",
                 "final_identification_status": "UNDERDETERMINED",
@@ -304,7 +336,6 @@ class ClaimClassifier:
                 "conclusion_summary": "Trasformazione avvenuta a valle di C_req. Origine causale tra H2-H5 INDETERMINATA."
             }
 
-        orr_b = round(n_conformant / float(n_valid), 4)
         return {
             "test_id": test_id,
             "session_regime": regime,
@@ -319,24 +350,26 @@ class ClaimClassifier:
                 "H1a_client_mutation": "DISCONFIRMED",
                 "H2_to_H5_internal": "UNDERDETERMINED (Sampling T > 0 o routing distribuito)"
             },
-            "conclusion_summary": f"Comportamento non deterministico osservato (ORR_b = {orr_b})."
+            "conclusion_summary": f"Comportamento non deterministico o varianza riscontrata (ORR_b = {orr_b})."
         }
 
 
 def main():
-    parser = argparse.ArgumentParser(description="CDP/SOP v2.3 Claim Classifier")
-    parser.add_argument("--trial-json", default=None)
-    parser.add_argument("--trials-dir", default=None)
-    parser.add_argument("--stats-json", default=None)
-    parser.add_argument("--test-id", default="T01")
-    parser.add_argument("--criterion", default="M1-scalar")
-    parser.add_argument("--regime", default="R1_PILOT")
-    parser.add_argument("--out", default=None)
+    parser = argparse.ArgumentParser(description="CDP/SOP v2.3 Deterministic Claim Classifier")
+    parser.add_argument("--trial-json", default=None, help="File JSON di un singolo trial")
+    parser.add_argument("--trials-dir", default=None, help="Directory contenente i trial_metadata.json della sessione")
+    parser.add_argument("--stats-json", default=None, help="File metrics_summary.json prodotto da cdp_stats.py")
+    parser.add_argument("--test-id", default=None, help="ID del test CDP/SOP (es. RUN0, T01..T14)")
+    parser.add_argument("--criterion", default="M1-scalar", help="Criterio di confronto preregistrato (default: M1-scalar)")
+    parser.add_argument("--regime", default="R1_PILOT", help="Regime metodologico (R1_PILOT, R2_CONSTRAINED)")
+    parser.add_argument("--out", default=None, help="File JSON di output (default: stdout)")
     args = parser.parse_args()
 
     stats_data = None
     if args.stats_json and Path(args.stats_json).is_file():
         stats_data = json.loads(Path(args.stats_json).read_text(encoding="utf-8"))
+
+    target_test_id = args.test_id or "UNRESOLVED"
 
     if args.trial_json:
         trial_data = json.loads(Path(args.trial_json).read_text(encoding="utf-8"))
@@ -352,10 +385,10 @@ def main():
                 t_eval = ClaimClassifier.evaluate_single_trial(t_data, args.criterion, args.regime)
                 trials_evals.append(t_eval)
             except Exception as e:
-                sys.stderr.write(f"claim_classifier: AVVISO: {tf}: {e}\n")
+                sys.stderr.write(f"claim_classifier: AVVISO: Impossibile leggere {tf}: {e}\n")
 
         res = ClaimClassifier.evaluate_test_session(
-            args.test_id,
+            target_test_id,
             trials_evals,
             stats_summary=stats_data,
             comparison_criterion=args.criterion,
@@ -366,7 +399,7 @@ def main():
             stdin_data = json.loads(sys.stdin.read())
             if isinstance(stdin_data, list):
                 trials_evals = [ClaimClassifier.evaluate_single_trial(t, args.criterion, args.regime) for t in stdin_data]
-                res = ClaimClassifier.evaluate_test_session(args.test_id, trials_evals, stats_data, args.criterion, args.regime)
+                res = ClaimClassifier.evaluate_test_session(target_test_id, trials_evals, stats_data, args.criterion, args.regime)
             else:
                 res = ClaimClassifier.evaluate_single_trial(stdin_data, args.criterion, args.regime)
         else:
@@ -386,3 +419,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
