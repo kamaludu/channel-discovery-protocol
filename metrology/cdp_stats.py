@@ -12,6 +12,20 @@
 # Contact: opensource@cevangel.anonaddy.me
 # ==============================================================================
 # Requirements: python (>=3.10), strictly standard library (zero-pip dependencies)
+#
+# ==============================================================================
+# GUIDA ARCHITETTURALE PER SVILUPPATORI (SUT / Tool Agnostic):
+# ==============================================================================
+# Questo modulo esegue le analisi statistiche e metrologiche formali della suite:
+#   1. Intervalli di confidenza esatti Clopper-Pearson al 95% per grandezze
+#      binomiali (ORR_b - Observed Replication Rate) su serie discrete di trial.
+#   2. Analisi delle differenze appaiate di latenza/TTFT (Student-t parametrico e
+#      Bootstrap non parametrico) con verifica di rilevanza rispetto all'MDE (T12).
+#   3. Calcolo della dimensione campionaria a priori per il regime confermatorio R2.
+#
+# Il modulo opera esclusivamente su dati numerici aggregati e non dipende in alcun
+# modo dall'eseguibile CLI SUT utilizzato (bash4llm o altro).
+# ==============================================================================
 
 import argparse
 import json
@@ -19,9 +33,11 @@ import math
 import random
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Union
 
 
 def _betacf(a: float, b: float, x: float, max_iter: int = 200, eps: float = 1e-15) -> float:
+    """Frazione continua per il calcolo della funzione Beta incompleta regolarizzata."""
     qab = a + b
     qap = a + 1.0
     qam = a - 1.0
@@ -62,6 +78,7 @@ def _betacf(a: float, b: float, x: float, max_iter: int = 200, eps: float = 1e-1
 
 
 def betainc(a: float, b: float, x: float) -> float:
+    """Funzione Beta incompleta regolarizzata I_x(a, b)."""
     if x < 0.0 or x > 1.0:
         raise ValueError("x deve appartenere all'intervallo [0, 1]")
     if x == 0.0:
@@ -79,6 +96,7 @@ def betainc(a: float, b: float, x: float) -> float:
 
 
 def inv_betainc(a: float, b: float, target_p: float, tol: float = 1e-8) -> float:
+    """Inversione numerica per bisezione della funzione Beta incompleta regolarizzata."""
     if target_p <= 0.0:
         return 0.0
     if target_p >= 1.0:
@@ -99,6 +117,7 @@ def inv_betainc(a: float, b: float, target_p: float, tol: float = 1e-8) -> float
 
 
 def student_t_cdf(t_val: float, df: int) -> float:
+    """Distribuzione cumulativa (CDF) della t di Student a df gradi di liberta'."""
     if df <= 0:
         raise ValueError("I gradi di liberta (df) devono essere > 0")
     if t_val == 0.0:
@@ -114,6 +133,7 @@ def student_t_cdf(t_val: float, df: int) -> float:
 
 
 def student_t_inv_two_tailed(alpha: float, df: int, tol: float = 1e-7) -> float:
+    """Valore critico t per intervallo di confidenza a due code (1 - alpha)."""
     target_p = 1.0 - (alpha / 2.0)
     low = 0.0
     high = max(1000.0, 10.0 / alpha)
@@ -130,7 +150,10 @@ def student_t_inv_two_tailed(alpha: float, df: int, tol: float = 1e-7) -> float:
     return (low + high) / 2.0
 
 
-def clopper_pearson_ci(k: int, n: int, alpha: float = 0.05) -> dict:
+def clopper_pearson_ci(k: int, n: int, alpha: float = 0.05) -> Dict[str, Any]:
+    """
+    Calcolo esatto dell'Intervallo di Confidenza Clopper-Pearson al (1 - alpha)%.
+    """
     if n <= 0:
         raise ValueError("La dimensione campionaria n deve essere > 0")
     if k < 0 or k > n:
@@ -167,16 +190,19 @@ def clopper_pearson_ci(k: int, n: int, alpha: float = 0.05) -> dict:
 
 
 def paired_difference_ttft(
-    pairs: list,
+    pairs: List[Union[Dict[str, Any], List[float]]],
     mde_ms: float = 100.0,
     alpha: float = 0.05,
     bootstrap_reps: int = 10000
-) -> dict:
+) -> Dict[str, Any]:
+    """
+    Analisi statistica delle differenze appaiate (Design Paired TTFT per T12).
+    """
     n = len(pairs)
     if n < 2:
         raise ValueError("L'analisi appaiata richiede almeno N = 2 coppie")
 
-    diffs = []
+    diffs: List[float] = []
     for p in pairs:
         if isinstance(p, dict):
             diffs.append(float(p["ttft_b"]) - float(p["ttft_a"]))
@@ -193,8 +219,9 @@ def paired_difference_ttft(
     ci_param_lower = bar_d - (t_crit * se_d)
     ci_param_upper = bar_d + (t_crit * se_d)
 
+    # Stima non parametrica via bootstrap percentile
     rng = random.Random(42)
-    boot_means = []
+    boot_means: List[float] = []
     for _ in range(bootstrap_reps):
         sample = [rng.choice(diffs) for _ in range(n)]
         boot_means.append(sum(sample) / float(n))
@@ -240,7 +267,10 @@ def a_priori_sample_size_r2(
     pilot_s_d: float,
     alpha: float = 0.05,
     power: float = 0.80
-) -> dict:
+) -> Dict[str, Any]:
+    """
+    Power Analysis a priori per determinare N nel regime confermatorio R2.
+    """
     if mde_delta_min <= 0.0 or pilot_s_d <= 0.0:
         raise ValueError("MDE e deviazione standard pilota devono essere > 0")
 
@@ -274,20 +304,20 @@ def main():
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     p_binom = subparsers.add_parser("binomial", parents=[common_parser], help="Intervallo Esatto Clopper-Pearson")
-    p_binom.add_argument("-k", "--k", type=int, required=True)
-    p_binom.add_argument("-n", "--n", type=int, required=True)
-    p_binom.add_argument("--alpha", type=float, default=0.05)
+    p_binom.add_argument("-k", "--k", type=int, required=True, help="Numero di successi osservati")
+    p_binom.add_argument("-n", "--n", type=int, required=True, help="Dimensione campionaria totale")
+    p_binom.add_argument("--alpha", type=float, default=0.05, help="Livello di significativita (default: 0.05 per CI 95%)")
 
     p_ttft = subparsers.add_parser("paired-ttft", parents=[common_parser], help="Analisi Appaiata TTFT (T12)")
-    p_ttft.add_argument("--pairs-json", type=str, required=True)
-    p_ttft.add_argument("--mde", type=float, default=100.0)
-    p_ttft.add_argument("--alpha", type=float, default=0.05)
-    p_ttft.add_argument("--bootstrap-reps", type=int, default=10000)
+    p_ttft.add_argument("--pairs-json", type=str, required=True, help="File JSON contenente l'array di coppie [A, B]")
+    p_ttft.add_argument("--mde", type=float, default=100.0, help="Minima Differenza Rilevante in ms (default: 100.0)")
+    p_ttft.add_argument("--alpha", type=float, default=0.05, help="Livello di significativita (default: 0.05)")
+    p_ttft.add_argument("--bootstrap-reps", type=int, default=10000, help="Numero di replicazioni bootstrap (default: 10000)")
 
     p_power = subparsers.add_parser("power", parents=[common_parser], help="Power Analysis Regime R2")
-    p_power.add_argument("--mde", type=float, required=True)
-    p_power.add_argument("--pilot-sd", type=float, required=True)
-    p_power.add_argument("--power", type=float, default=0.80)
+    p_power.add_argument("--mde", type=float, required=True, help="Minima Differenza Rilevante target")
+    p_power.add_argument("--pilot-sd", type=float, required=True, help="Deviazione standard riscontrata nella fase pilota R1")
+    p_power.add_argument("--power", type=float, default=0.80, help="Potenza statistica desiderata 1 - beta (default: 0.80)")
 
     args = parser.parse_args()
 
