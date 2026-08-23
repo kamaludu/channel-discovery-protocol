@@ -97,7 +97,6 @@ fi
 show_help() {
   if [ -n "$HELP_FILE" ] && [ -f "$HELP_FILE" ]; then
     if [ -n "${C_BCYAN:-}" ]; then
-      # Visualizzazione con evidenziazione sintattica semantica se terminale interattivo a colori
       sed \
         -e "s/^\([A-Za-z0-9][A-Za-z0-9[:blank:]&]*:\)/${C_BCYAN}\1${C_RST}/" \
         -e "s/\(--[a-zA-Z0-9-][a-zA-Z0-9-]*\)/${C_BGREEN}\1${C_RST}/g" \
@@ -114,18 +113,25 @@ show_help() {
   else
     printf '%b' "${C_BMAGENTA}========================================${C_RST}
 ${C_BOLD}CHANNEL DISCOVERY PROTOCOL (CDP/SOP v2.3)${C_RST}
-${C_BYELLOW}GUIDA RAPIDA DI EMERGENZA (help.txt mancante)${C_RST}
+${C_BYELLOW}GUIDA RAPIDA DI EMERGENZA${C_RST}
 ${C_BMAGENTA}========================================${C_RST}
 USO:
   ${C_BGREEN}cdp run <TEST_ID> [OPZIONI]${C_RST}
-  ${C_BGREEN}cdp summary [--out <FILE>]${C_RST}
-  ${C_BGREEN}cdp show [latest|RUN_ID]${C_RST}
-  ${C_BGREEN}cdp list [runs|tests]${C_RST}
-  ${C_BGREEN}cdp telemetry [--endpoint <URL>]${C_RST}
-  ${C_BGREEN}cdp stats <binomial|paired-ttft|power>${C_RST}
-  ${C_BGREEN}cdp unicode \"<STRINGA>\"${C_RST}
-  ${C_BGREEN}cdp status${C_RST}
-  ${C_BGREEN}cdp clean [tmp|all]${C_RST}
+    Opzioni principali:
+      --pacing <SEC>       Intervallo di sicurezza in secondi per rate limits (default: 4).
+      --regime <REGIME>    pilot (N=5) | confirmatory (N=20).
+      --provider <NAME>    Provider target (es. gemini, groq, mistral).
+      --model <MODEL_ID>   Model ID esplicito.
+      --dry-run            Simulazione locale senza traffico di rete.
+
+  ${C_BGREEN}cdp summary [--out <FILE>]${C_RST}      Genera Dossier di Campagna comparativo.
+  ${C_BGREEN}cdp show [latest|RUN_ID]${C_RST}        Visualizza Referto Master SOTU v2.3.
+  ${C_BGREEN}cdp list [runs|tests]${C_RST}           Elenca sessioni archiviate o catalogo test.
+  ${C_BGREEN}cdp telemetry [--endpoint <URL>]${C_RST} Sonda telemetrica host e stima baseline RTT.
+  ${C_BGREEN}cdp stats <binomial|paired-ttft|power>${C_RST} Calcolatore statistico metrologico.
+  ${C_BGREEN}cdp unicode \"<STRINGA>\"${C_RST}          Analisi Unicode UAX #15 e forme normalizzate.
+  ${C_BGREEN}cdp status${C_RST}                      Diagnostica workspace e permessi.
+  ${C_BGREEN}cdp clean [tmp|all]${C_RST}             Pulizia sandbox temporanee o archivio runs.
 ${C_BMAGENTA}========================================${C_RST}
 "
   fi
@@ -156,9 +162,50 @@ case "$CMD" in
       printf 'Digita "%scdp --help%s" per l'\''elenco completo dei comandi.\n' "${C_BGREEN}" "${C_RST}" >&2
       exit 2
     fi
-    TARGET_TEST="$1"
-    shift
-    bash "$WORKSPACE_DIR/cdp_run.sh" --test "$TARGET_TEST" "$@"
+
+    # Parsing flessibile degli argomenti per estrarre il target test indipendentemente dalla posizione
+    TARGET_TEST=""
+    FORWARD_ARGS=()
+
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --test)
+          [ $# -ge 2 ] || { printf '%scdp run: ERRORE: --test richiede un ID%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
+          TARGET_TEST="$2"
+          shift 2
+          ;;
+        --pacing|--regime|--provider|--model|--endpoint|--mde|--bash4llm-bin|--vault-ctx)
+          [ $# -ge 2 ] || { printf '%scdp run: ERRORE: %s richiede un argomento%s\n' "${C_BRED}" "$1" "${C_RST}" >&2; exit 2; }
+          FORWARD_ARGS+=( "$1" "$2" )
+          shift 2
+          ;;
+        --dry-run|--debug|--no-color)
+          FORWARD_ARGS+=( "$1" )
+          shift
+          ;;
+        -h|--help)
+          show_help
+          ;;
+        -*)
+          FORWARD_ARGS+=( "$1" )
+          shift
+          ;;
+        *)
+          if [ -z "$TARGET_TEST" ]; then
+            TARGET_TEST="$1"
+          else
+            FORWARD_ARGS+=( "$1" )
+          fi
+          shift
+          ;;
+      esac
+    done
+
+    if [ -z "$TARGET_TEST" ]; then
+      TARGET_TEST="RUN0"
+    fi
+
+    bash "$WORKSPACE_DIR/cdp_run.sh" --test "$TARGET_TEST" "${FORWARD_ARGS[@]}"
     ;;
 
   # ---------------------------------------------------------------------------
