@@ -1,4 +1,5 @@
-# CHANNEL DISCOVERY PROTOCOL (CDP / SOP v2.3)
+
+# <img src="docs/cdp320.png" alt="Logo 320" title="Logo CDP" width="50"> CHANNEL DISCOVERY PROTOCOL (CDP / SOP v2.3)
 ### *Framework Epistemologico Formale & Harness Metrologico per l'Identificazione di Sistemi LLM Black-Box*
 
 ```text
