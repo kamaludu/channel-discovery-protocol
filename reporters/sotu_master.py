@@ -173,8 +173,8 @@ class SotuMasterReporter:
         metrics: Optional[Dict[str, Any]] = None,
         trial_data: Optional[Dict[str, Any]] = None
     ):
-        self.manifest = manifest
-        self.classification = classification
+        self.manifest = manifest or {}
+        self.classification = classification or {}
         self.metrics = metrics or {}
         self.trial = trial_data or {}
 
@@ -191,15 +191,15 @@ class SotuMasterReporter:
     def build_markdown_report(self) -> str:
         lines = []
 
-        sut_tuple = self.manifest.get("sut_formal_tuple", {})
-        host_telem = self.manifest.get("host_telemetry", {})
-        audit_trail = self.manifest.get("audit_trail", {})
-        timing_info = self.trial.get("timing", {})
+        sut_tuple = self.manifest.get("sut_formal_tuple", {}) or {}
+        host_telem = self.manifest.get("host_telemetry", {}) or {}
+        audit_trail = self.manifest.get("audit_trail", {}) or {}
+        timing_info = self.trial.get("timing", {}) or {}
 
         provider = sut_tuple.get("provider") or "UNRESOLVED"
         model_id = sut_tuple.get("model_id") or "UNRESOLVED"
         endpoint_url = sut_tuple.get("endpoint_url") or "NOT_OBSERVED"
-        sampling = sut_tuple.get("sampling", {})
+        sampling = sut_tuple.get("sampling", {}) or {}
         temp = sampling.get("temperature", "NOT_OBSERVED")
         max_tok = sampling.get("max_tokens", "NOT_OBSERVED")
 
@@ -211,7 +211,7 @@ class SotuMasterReporter:
         rtt_base = host_telem.get("rtt_baseline_ms", "null")
 
         v3_class = audit_trail.get("v3_classification", "V3-0a (No-Capture)")
-        is_modalita_a = "V3-3" in v3_class
+        is_modalita_a = "V3-3" in str(v3_class)
         modalita_op = "Modalita A (con V3 attivo)" if is_modalita_a else "Modalita B (Black-Box U -> O)"
         regime_metodologico = self.manifest.get("regime", "R1_PILOT")
 
@@ -264,7 +264,7 @@ class SotuMasterReporter:
         lines.append(f"   - Ambiente    : e_0 (Pure Ephemeral State, stateless execution)")
         lines.append("")
 
-        dag = self.manifest.get("provenance_dag", self.trial.get("provenance_dag", {}))
+        dag = self.manifest.get("provenance_dag", {}) or self.trial.get("provenance_dag", {}) or {}
         u_sha = dag.get("stimulus_intended_sha256") or "NOT_OBSERVED"
         u_buf_sha = dag.get("u_buffer_bytes_sha256") or u_sha
 
@@ -294,7 +294,7 @@ class SotuMasterReporter:
         orr_b_val = self.metrics.get("point_estimate_ORR_b")
         orr_b_str = f"{orr_b_val:.4f}" if isinstance(orr_b_val, (int, float)) else "N/A"
 
-        ci_block = self.metrics.get("confidence_interval_95_clopper_pearson", {})
+        ci_block = self.metrics.get("confidence_interval_95_clopper_pearson", {}) or {}
         ci_lower = ci_block.get("lower")
         ci_upper = ci_block.get("upper")
         ci_str = f"[{ci_lower:.4f}, {ci_upper:.4f}]" if (ci_lower is not None and ci_upper is not None) else "N/A"
@@ -428,22 +428,46 @@ def main():
         trial_file = found_trial_files[0] if found_trial_files else (run_path / "trial_metadata.json")
 
         if manifest_file.exists():
-            manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            try:
+                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+            except Exception:
+                manifest_data = {}
         if class_file.exists():
-            classification_data = json.loads(class_file.read_text(encoding="utf-8"))
+            try:
+                classification_data = json.loads(class_file.read_text(encoding="utf-8"))
+            except Exception:
+                classification_data = {}
         if metrics_file.exists():
-            metrics_data = json.loads(metrics_file.read_text(encoding="utf-8"))
+            try:
+                metrics_data = json.loads(metrics_file.read_text(encoding="utf-8"))
+            except Exception:
+                metrics_data = {}
         if trial_file.exists():
-            trial_data = json.loads(trial_file.read_text(encoding="utf-8"))
+            try:
+                trial_data = json.loads(trial_file.read_text(encoding="utf-8"))
+            except Exception:
+                trial_data = {}
 
-    if args.manifest:
-        manifest_data = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
-    if args.classification:
-        classification_data = json.loads(Path(args.classification).read_text(encoding="utf-8"))
-    if args.metrics:
-        metrics_data = json.loads(Path(args.metrics).read_text(encoding="utf-8"))
-    if args.trial_json:
-        trial_data = json.loads(Path(args.trial_json).read_text(encoding="utf-8"))
+    if args.manifest and Path(args.manifest).is_file():
+        try:
+            manifest_data = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
+        except Exception:
+            manifest_data = {}
+    if args.classification and Path(args.classification).is_file():
+        try:
+            classification_data = json.loads(Path(args.classification).read_text(encoding="utf-8"))
+        except Exception:
+            classification_data = {}
+    if args.metrics and Path(args.metrics).is_file():
+        try:
+            metrics_data = json.loads(Path(args.metrics).read_text(encoding="utf-8"))
+        except Exception:
+            metrics_data = {}
+    if args.trial_json and Path(args.trial_json).is_file():
+        try:
+            trial_data = json.loads(Path(args.trial_json).read_text(encoding="utf-8"))
+        except Exception:
+            trial_data = {}
 
     if not manifest_data and trial_data:
         manifest_data = {
@@ -479,4 +503,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
