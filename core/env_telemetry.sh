@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-3.0-or-later
-# ======================================
+# ==============================================================================
 # CDP/SOP v2.3 METROLOGY HARNESS
 # File: core/env_telemetry.sh
-# Component: Sonda Telemetrica Ambientale Termux
-# Standard: CDP v2.3 & SOP v2.3
+# Component: Sonda Telemetrica Ambientale Android/Termux & POSIX Host
+# Standard: CDP v2.3 (Sez. 4.1) & SOP v2.3 (Sez. 1.3, 3.1)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
 # Contact: opensource@cevangel.anonaddy.me
-# ======================================
+# ==============================================================================
+# Requirements: bash (>=4.0), coreutils, util-linux, curl, jq, openssl, python (>=3.10 stdlib)
+# Zero-PIP: nessuna dipendenza esterna; solo utilita' standard di sistema.
 
 set -euo pipefail
 umask 077
@@ -17,6 +19,9 @@ umask 077
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
 
+# ==============================================================================
+# 1. GESTIONE PARAMETRI CLI (Nessun default hardcoded)
+# ==============================================================================
 TARGET_ENDPOINT=""
 OUTPUT_FILE=""
 RTT_SAMPLES=5
@@ -26,11 +31,15 @@ usage() {
   cat <<'EOF'
 Uso: env_telemetry.sh [OPZIONI]
 
+Sonda telemetrica per l'acquisizione delle caratteristiche hardware/software
+dell'host di esecuzione e misurazione empirica della baseline RTT verso l'endpoint.
+
 Opzioni:
-  --endpoint <URL>     URL dell'endpoint SUT per la stima della baseline RTT.
-  --out <FILE>         Percorso del file JSON di output (default: stdout).
-  --samples <N>        Numero di campioni per la stima RTT (default: 5).
-  --quiet              Sopprime i messaggi diagnostici su stderr.
+  --endpoint <URL>     URL dell'endpoint SUT per la stima empirica di baseline RTT.
+                       Se omesso o vuoto, la baseline RTT viene rubricata come null (NOT_OBSERVED).
+  --out <FILE>         Percorso di destinazione per il file JSON generato (default: stdout).
+  --samples <N>        Numero di campioni per la stima della mediana RTT (default: 5).
+  --quiet              Sopprime i messaggi diagnostici informativi su stderr.
   -h, --help           Mostra questa guida ed esce.
 EOF
   exit 0
@@ -49,7 +58,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --samples)
-      [ $# -ge 2 ] || { printf 'env_telemetry: ERRORE: --samples richiede un intero\n' >&2; exit 2; }
+      [ $# -ge 2 ] || { printf 'env_telemetry: ERRORE: --samples richiede un numero intero\n' >&2; exit 2; }
       RTT_SAMPLES="$2"
       shift 2
       ;;
@@ -67,16 +76,20 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-CPU_ARCH="$(uname -m 2>/dev/null || echo "unknown")"
-KERNEL_RELEASE="$(uname -r 2>/dev/null || echo "unknown")"
-OS_UNAME="$(uname -s 2>/dev/null || echo "Linux")"
+# ==============================================================================
+# 2. INTROSPEZIONE HARDWARE, KERNEL E SISTEMA OPERATIVO (Android / POSIX)
+# ==============================================================================
+CPU_ARCH="$(uname -m 2>/dev/null || echo "NOT_OBSERVED")"
+KERNEL_RELEASE="$(uname -r 2>/dev/null || echo "NOT_OBSERVED")"
+OS_UNAME="$(uname -s 2>/dev/null || echo "NOT_OBSERVED")"
 
 ANDROID_VERSION="non-android"
 DEVICE_MODEL="Generic POSIX Host"
 
+# Rilevamento empirico ambiente Android/Termux tramite getprop o build.prop
 if [ -n "${TERMUX_VERSION:-}" ] || [ -d "/data/data/com.termux" ] || [ -f "/system/build.prop" ]; then
   if command -v getprop >/dev/null 2>&1; then
-    ANDROID_VERSION="$(getprop ro.build.version.release 2>/dev/null || echo "unknown")"
+    ANDROID_VERSION="$(getprop ro.build.version.release 2>/dev/null || echo "NOT_OBSERVED")"
     DEV_MANUFACTURER="$(getprop ro.product.manufacturer 2>/dev/null || echo "")"
     DEV_MODEL_NAME="$(getprop ro.product.model 2>/dev/null || echo "")"
     if [ -n "$DEV_MANUFACTURER" ] || [ -n "$DEV_MODEL_NAME" ]; then
@@ -92,26 +105,32 @@ else
   DEVICE_MODEL="${OS_UNAME} (${CPU_ARCH})"
 fi
 
-BASH_VER="${BASH_VERSION:-unknown}"
-CURL_VER="$(curl --version 2>/dev/null | head -n 1 | awk '{print $2}' || echo "unknown")"
-OPENSSL_VER="$(openssl version 2>/dev/null | awk '{print $2}' || echo "unknown")"
-JQ_VER="$(jq --version 2>/dev/null | sed 's/^jq-//' || echo "unknown")"
+# ==============================================================================
+# 3. INTROSPEZIONE VERSIONI RUNTIME ED UTILITY DI MISURA
+# ==============================================================================
+BASH_VER="${BASH_VERSION:-NOT_OBSERVED}"
+CURL_VER="$(curl --version 2>/dev/null | head -n 1 | awk '{print $2}' || echo "NOT_OBSERVED")"
+OPENSSL_VER="$(openssl version 2>/dev/null | awk '{print $2}' || echo "NOT_OBSERVED")"
+JQ_VER="$(jq --version 2>/dev/null | sed 's/^jq-//' || echo "NOT_OBSERVED")"
 
-PYTHON_VER="not_found"
-UNICODE_VER="not_found"
+PYTHON_VER="NOT_OBSERVED"
+UNICODE_VER="NOT_OBSERVED"
 if command -v python3 >/dev/null 2>&1; then
-  PYTHON_VER="$(python3 -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>/dev/null || echo "unknown")"
-  UNICODE_VER="$(python3 -c "import unicodedata; print(unicodedata.unidata_version)" 2>/dev/null || echo "unknown")"
+  PYTHON_VER="$(python3 -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>/dev/null || echo "NOT_OBSERVED")"
+  UNICODE_VER="$(python3 -c "import unicodedata; print(unicodedata.unidata_version)" 2>/dev/null || echo "NOT_OBSERVED")"
 elif command -v python >/dev/null 2>&1; then
-  PYTHON_VER="$(python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>/dev/null || echo "unknown")"
-  UNICODE_VER="$(python -c "import unicodedata; print(unicodedata.unidata_version)" 2>/dev/null || echo "unknown")"
+  PYTHON_VER="$(python -c "import sys; print('.'.join(map(str, sys.version_info[:3])))" 2>/dev/null || echo "NOT_OBSERVED")"
+  UNICODE_VER="$(python -c "import unicodedata; print(unicodedata.unidata_version)" 2>/dev/null || echo "NOT_OBSERVED")"
 fi
 
-ACTIVE_LOCALE="${LC_ALL:-${LANG:-unknown}}"
+ACTIVE_LOCALE="${LC_ALL:-${LANG:-NOT_OBSERVED}}"
 
+# ==============================================================================
+# 4. MISURAZIONE EMPIRICA BASELINE RTT (Round Trip Time verso l'endpoint)
+# ==============================================================================
 RTT_MEDIAN_MS="null"
 
-if [ -n "$TARGET_ENDPOINT" ] && [ "$TARGET_ENDPOINT" != "dry-run" ] && [ "$TARGET_ENDPOINT" != "local" ]; then
+if [ -n "$TARGET_ENDPOINT" ] && [ "$TARGET_ENDPOINT" != "dry-run" ] && [ "$TARGET_ENDPOINT" != "local" ] && [ "$TARGET_ENDPOINT" != "UNRESOLVED" ]; then
   [ "$QUIET_MODE" -eq 1 ] || printf 'env_telemetry: Misurazione baseline RTT verso %s (%d campioni)...\n' "$TARGET_ENDPOINT" "$RTT_SAMPLES" >&2
 
   BASE_TMP="${TMPDIR:-/data/data/com.termux/files/usr/tmp}"
@@ -151,6 +170,9 @@ if [ -n "$TARGET_ENDPOINT" ] && [ "$TARGET_ENDPOINT" != "dry-run" ] && [ "$TARGE
   rm -f "$RTT_TMP_FILE" 2>/dev/null || true
 fi
 
+# ==============================================================================
+# 5. GENERAZIONE PAYLOAD JSON DI TELEMETRIA AMBIENTALE
+# ==============================================================================
 TIMESTAMP_EPOCH="$(date +%s)"
 TIMESTAMP_ISO="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
