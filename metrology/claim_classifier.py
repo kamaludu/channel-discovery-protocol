@@ -216,7 +216,7 @@ class ClaimClassifier:
                 "conclusion_summary": "Nessun trial registrato per la sessione."
             }
 
-        n_valid = sum(1 for t in trials_evaluations if t.get("verdict_status") not in ["INVALID", "OUTPUT_OBSERVED_UNATTRIBUTED"])
+        n_valid_trials = sum(1 for t in trials_evaluations if t.get("verdict_status") not in ["INVALID", "OUTPUT_OBSERVED_UNATTRIBUTED"])
         n_pre_client_mut = sum(1 for t in trials_evaluations if t.get("verdict_status") == "LOCAL_PRE_TRANSPORT_MUTATION")
 
         # T12: TEST APPAIATO TTFT (Grandezza Continua M4)
@@ -241,11 +241,13 @@ class ClaimClassifier:
                 final_vector = cls.format_evidence_vector("O3", "C1", r_scope, "S1")
                 conclusion_txt = "Nessuna differenza sistematica riscontrata nel TTFT osservato tra le due condizioni."
 
+            n_valid_final = stats_summary.get("sample_size_pairs_N", n_valid_trials)
+
             return {
                 "test_id": test_id,
                 "session_regime": regime,
                 "comparison_criterion": "M4-Continuous-TTFT",
-                "sample_size_valid": n_valid,
+                "sample_size_valid": n_valid_final,
                 "final_verdict": "DIAGNOSTIC_TTFT_EVALUATION_COMPLETE",
                 "final_evidence_status": final_ev_status,
                 "final_identification_status": final_id_status,
@@ -260,6 +262,12 @@ class ClaimClassifier:
                 "conclusion_summary": conclusion_txt
             }
 
+        # Determinazione della cardinalità valida N_valid dando priorità alla statistica formale
+        if stats_summary and "sample_size_n" in stats_summary:
+            n_valid = int(stats_summary["sample_size_n"])
+        else:
+            n_valid = n_valid_trials
+
         if n_valid == 0:
             return {
                 "test_id": test_id,
@@ -271,15 +279,15 @@ class ClaimClassifier:
                 "conclusion_summary": "Tutti i trial della sessione sono risultati invalidi o non attribuibili."
             }
 
-        # Determinazione del tasso di conformita ORR_b con priorita al sommario statistico formale
+        # Determinazione del tasso di conformità ORR_b
         orr_b: float = 0.0
         if stats_summary and "point_estimate_ORR_b" in stats_summary:
             orr_b = float(stats_summary["point_estimate_ORR_b"])
         else:
             n_conformant_raw = sum(1 for t in trials_evaluations if t.get("verdict_status") in ["CONFORMANT_REPRODUCTION", "VALID_BEHAVIORAL_ONLY"] and t.get("evidence_status") == "SUPPORTED")
-            orr_b = round(n_conformant_raw / float(n_valid), 4)
+            orr_b = round(n_conformant_raw / float(max(1, n_valid)), 4)
 
-        if n_pre_client_mut == n_valid:
+        if n_pre_client_mut > 0 and n_pre_client_mut == n_valid:
             return {
                 "test_id": test_id,
                 "session_regime": regime,
@@ -367,7 +375,10 @@ def main():
 
     stats_data = None
     if args.stats_json and Path(args.stats_json).is_file():
-        stats_data = json.loads(Path(args.stats_json).read_text(encoding="utf-8"))
+        try:
+            stats_data = json.loads(Path(args.stats_json).read_text(encoding="utf-8"))
+        except Exception:
+            stats_data = None
 
     target_test_id = args.test_id or "UNRESOLVED"
 
@@ -419,4 +430,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
