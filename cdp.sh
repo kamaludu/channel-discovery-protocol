@@ -21,6 +21,8 @@
 #   - Fornisce accesso diretto ai calcolatori metrologici (UAX #15, Clopper-Pearson).
 #   - Compila e visualizza referti SOTU e il Dossier di Campagna comparativo.
 #   - Esegue la diagnostica di integrita' e l'hardening dei permessi (0700).
+#   - Integra una palette semantica ANSI sicura, conforme a NO_COLOR e con
+#     decadimento trasparente a stringhe vuote se l'output e' reindirizzato.
 #
 # Nessun provider, modello o endpoint e' cablato: i parametri forniti dall'operatore
 # vengono propagati intatti lungo l'intera catena di esecuzione.
@@ -31,6 +33,51 @@ umask 077
 
 export LC_ALL=C.UTF-8
 export LANG=C.UTF-8
+
+# Pre-parsing per intercettare flag --no-color
+if [ "$#" -gt 0 ]; then
+  for _arg in "$@"; do
+    if [ "$_arg" = "--no-color" ]; then
+      export NO_COLOR=1
+    fi
+  done
+  unset _arg
+fi
+
+# ==============================================================================
+# SOTTOSISTEMA COLORI ANSI SEMANTICO & SICURO (NO_COLOR & TTY-Safe)
+# ==============================================================================
+if [ -t 1 ] && [ "${TERM:-}" != "dumb" ] && [ -z "${NO_COLOR:-}" ]; then
+  C_RST=$'\e[0m'
+  C_BOLD=$'\e[1m'
+  C_DIM=$'\e[2m'
+  C_UNDERLINE=$'\e[4m'
+  C_INVERT=$'\e[7m'
+
+  # Colori Standard (Normali)
+  C_BLACK=$'\e[0;30m'
+  C_RED=$'\e[0;31m'
+  C_GREEN=$'\e[0;32m'
+  C_YELLOW=$'\e[0;33m'
+  C_BLUE=$'\e[0;34m'
+  C_MAGENTA=$'\e[0;35m'
+  C_CYAN=$'\e[0;36m'
+  C_WHITE=$'\e[0;37m'
+
+  # Colori Bold / High-Intensity
+  C_BBLACK=$'\e[1;30m'  # Dark Gray
+  C_BRED=$'\e[1;31m'
+  C_BGREEN=$'\e[1;32m'
+  C_BYELLOW=$'\e[1;33m'
+  C_BBLUE=$'\e[1;34m'
+  C_BMAGENTA=$'\e[1;35m'
+  C_BCYAN=$'\e[1;36m'
+  C_BWHITE=$'\e[1;37m'
+else
+  C_RST="" C_BOLD="" C_DIM="" C_UNDERLINE="" C_INVERT=""
+  C_BLACK="" C_RED="" C_GREEN="" C_YELLOW="" C_BLUE="" C_MAGENTA="" C_CYAN="" C_WHITE=""
+  C_BBLACK="" C_BRED="" C_BGREEN="" C_BYELLOW="" C_BBLUE="" C_BMAGENTA="" C_BCYAN="" C_BWHITE=""
+fi
 
 # Risoluzione deterministica della root del workspace
 WORKSPACE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
@@ -49,31 +96,38 @@ fi
 
 show_help() {
   if [ -n "$HELP_FILE" ] && [ -f "$HELP_FILE" ]; then
-    if command -v less >/dev/null 2>&1 && [ -t 1 ]; then
-      less -R "$HELP_FILE"
+    if [ -n "${C_BCYAN:-}" ]; then
+      # Visualizzazione con evidenziazione sintattica semantica se terminale interattivo a colori
+      sed \
+        -e "s/^\([A-Za-z0-9][A-Za-z0-9[:blank:]&]*:\)/${C_BCYAN}\1${C_RST}/" \
+        -e "s/\(--[a-zA-Z0-9-][a-zA-Z0-9-]*\)/${C_BGREEN}\1${C_RST}/g" \
+        -e "s/\(<[a-zA-Z0-9_]\{1,\}>\)/${C_YELLOW}\1${C_RST}/g" \
+        -e "s/\(\$[[:blank:]]*cdp[[:blank:]][^$]*\)/${C_BOLD}${C_GREEN}\1${C_RST}/g" \
+        -e "s/\(RUN0\)/${C_BMAGENTA}\1${C_RST}/g" \
+        -e "s/\(T[0-9][0-9]\)/${C_BCYAN}\1${C_RST}/g" \
+        -e "s/\(========================================\)/${C_BMAGENTA}\1${C_RST}/g" \
+        -e "s/\(----------------------------------------\)/${C_BBLACK}\1${C_RST}/g" \
+        "$HELP_FILE"
     else
       cat "$HELP_FILE"
     fi
   else
-    cat <<'EOF'
-+------------------------------------------------------------------------------+
-|             CHANNEL DISCOVERY PROTOCOL (CDP/SOP v2.3) — MASTER CLI           |
-+------------------------------------------------------------------------------+
-USO RAPIDO:
-  cdp run <TEST_ID> [OPZIONI]     Esegue un test (RUN0, T01..T14, ALL_FOUNDATIONAL, ALL).
-  cdp summary [--out <FILE>]      Genera il Dossier di Campagna e Quadro Sinottico.
-  cdp show [latest|RUN_ID]        Visualizza il referto SOTU dell'ultima sessione.
-  cdp list [runs|tests]           Elenca le sessioni salvate o il catalogo test.
-  cdp telemetry [--endpoint <URL>] Misura telemetria host e baseline RTT empirica.
-  cdp stats binomial -k K -n N    Calcolo esatto Clopper-Pearson 95%.
-  cdp stats paired-ttft --pairs-json <F>  Analisi differenze appaiate TTFT (T12).
-  cdp stats power --mde M --pilot-sd S    Power analysis a priori per regime R2.
-  cdp unicode "<STRINGA>"         Analisi UAX #15 e scomposizione codepoint.
-  cdp status                      Verifica integrita e permessi del workspace (0700).
-  cdp clean [tmp|all]             Pulizia sandbox temporanee o archivio sessioni.
-  cdp -?, -h, --help, help        Mostra questa guida completa.
-+------------------------------------------------------------------------------+
-EOF
+    printf '%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}CHANNEL DISCOVERY PROTOCOL (CDP/SOP v2.3)${C_RST}
+${C_BYELLOW}GUIDA RAPIDA DI EMERGENZA (help.txt mancante)${C_RST}
+${C_BMAGENTA}========================================${C_RST}
+USO:
+  ${C_BGREEN}cdp run <TEST_ID> [OPZIONI]${C_RST}
+  ${C_BGREEN}cdp summary [--out <FILE>]${C_RST}
+  ${C_BGREEN}cdp show [latest|RUN_ID]${C_RST}
+  ${C_BGREEN}cdp list [runs|tests]${C_RST}
+  ${C_BGREEN}cdp telemetry [--endpoint <URL>]${C_RST}
+  ${C_BGREEN}cdp stats <binomial|paired-ttft|power>${C_RST}
+  ${C_BGREEN}cdp unicode \"<STRINGA>\"${C_RST}
+  ${C_BGREEN}cdp status${C_RST}
+  ${C_BGREEN}cdp clean [tmp|all]${C_RST}
+${C_BMAGENTA}========================================${C_RST}
+"
   fi
   exit 0
 }
@@ -98,8 +152,8 @@ case "$CMD" in
   # ---------------------------------------------------------------------------
   run|test)
     if [ $# -eq 0 ]; then
-      printf 'cdp: ERRORE: Specificare il TEST_ID (es: cdp run RUN0, cdp run T01, cdp run ALL)\n' >&2
-      printf 'Digita "cdp --help" per l'\''elenco completo dei comandi.\n' >&2
+      printf '%scdp: ERRORE: Specificare il TEST_ID (es: cdp run RUN0, cdp run T01, cdp run ALL)%s\n' "${C_BRED}" "${C_RST}" >&2
+      printf 'Digita "%scdp --help%s" per l'\''elenco completo dei comandi.\n' "${C_BGREEN}" "${C_RST}" >&2
       exit 2
     fi
     TARGET_TEST="$1"
@@ -115,7 +169,7 @@ case "$CMD" in
     while [ $# -gt 0 ]; do
       case "$1" in
         --out)
-          [ $# -ge 2 ] || { printf 'cdp summary: ERRORE: --out richiede un percorso file\n' >&2; exit 2; }
+          [ $# -ge 2 ] || { printf '%scdp summary: ERRORE: --out richiede un percorso file%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
           OUT_FILE="$2"
           shift 2
           ;;
@@ -127,7 +181,7 @@ case "$CMD" in
     "$PYTHON_BIN" "$WORKSPACE_DIR/reporters/campaign_dashboard.py" \
       --runs-dir "$WORKSPACE_DIR/runs" \
       --out "$OUT_FILE"
-    printf '\ncdp: Dossier di Campagna generato con successo in: %s\n' "$OUT_FILE"
+    printf '\n%scdp: Dossier di Campagna generato con successo in: %s%s%s\n' "${C_BGREEN}" "${C_BOLD}${C_BWHITE}" "$OUT_FILE" "${C_RST}"
     ;;
 
   # ---------------------------------------------------------------------------
@@ -139,7 +193,7 @@ case "$CMD" in
     if [ "$TARGET" = "latest" ]; then
       LATEST_DIR="$(ls -td "$WORKSPACE_DIR/runs"/RUN_* 2>/dev/null | head -n 1 || true)"
       if [ -z "$LATEST_DIR" ] || [ ! -d "$LATEST_DIR" ]; then
-        printf 'cdp: Nessuna sessione trovata in %s/runs/\n' "$WORKSPACE_DIR" >&2
+        printf '%scdp: Nessuna sessione trovata in %s/runs/%s\n' "${C_BYELLOW}" "$WORKSPACE_DIR" "${C_RST}" >&2
         exit 1
       fi
       REPORT_FILE="$LATEST_DIR/SOTU_MASTER_REPORT.md"
@@ -151,7 +205,7 @@ case "$CMD" in
       elif [ -f "$WORKSPACE_DIR/$TARGET" ]; then
         REPORT_FILE="$WORKSPACE_DIR/$TARGET"
       else
-        printf 'cdp: Sessione o file non trovato: %s\n' "$TARGET" >&2
+        printf '%scdp: Sessione o file non trovato: %s%s\n' "${C_BRED}" "$TARGET" "${C_RST}" >&2
         exit 1
       fi
     fi
@@ -163,7 +217,7 @@ case "$CMD" in
         cat "$REPORT_FILE"
       fi
     else
-      printf 'cdp: Referto SOTU non presente in: %s\n' "$(dirname "$REPORT_FILE")" >&2
+      printf '%scdp: Referto SOTU non presente in: %s%s\n' "${C_BRED}" "$(dirname "$REPORT_FILE")" "${C_RST}" >&2
       exit 1
     fi
     ;;
@@ -175,41 +229,50 @@ case "$CMD" in
     SUB="${1:-runs}"
     case "$SUB" in
       tests)
-        cat <<'EOF'
-CATALOGO BATTERIA SPERIMENTALE CDP/SOP v2.3:
-  RUN0 : Calibrazione Osservabilita V3 & Convalida Catena di Misura
-  T01  : Transport Integrity & Canary Preservation (Ladder OFAT)
-  T02  : Whitespace & Control Boundary Preservation
-  T03  : Unicode Canonical & Compatibility Normalization (UAX #15)
-  T04  : Invisible & Format Characters (ZWSP, ZWNJ, BOM)
-  T05  : Cross-Turn State Recall Probe
-  T06  : Cross-Session Persistence Phenotype
-  T07  : Markup-Like User Data Interpretation
-  T08  : Escape Sequences & Output Transformation
-  T09  : Streaming Termination Protocol Characterization
-  T10  : Cross-System Phenomenological Replication
-  T11  : Token Accounting Discrepancy Probe
-  T12  : Paired Latency & Observed TTFT Difference (Design Appaiato)
-  T13  : Declared Prefix Caching Probe
-  T14  : Long-Context Needle Retrieval (Matrice L x D)
-EOF
+        printf '%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}CATALOGO BATTERIA SPERIMENTALE CDP/SOP v2.3${C_RST}
+${C_BMAGENTA}========================================${C_RST}
+  ${C_BMAGENTA}RUN0${C_RST} : Calibrazione Osservabilita V3 (Obbligatoria)
+  ${C_BGREEN}T01${C_RST}  : Transport Integrity & Canary Preservation
+  ${C_BGREEN}T02${C_RST}  : Whitespace & Control Boundary Preservation
+  ${C_BGREEN}T03${C_RST}  : Unicode Canonical & Compatibility Normalization
+  ${C_BGREEN}T04${C_RST}  : Invisible & Format Characters (ZWSP, BOM)
+  ${C_BBLUE}T05${C_RST}  : Cross-Turn State Recall Probe
+  ${C_BBLUE}T06${C_RST}  : Cross-Session Persistence Phenotype
+  ${C_BBLUE}T07${C_RST}  : Markup-Like User Data Interpretation
+  ${C_BBLUE}T08${C_RST}  : Escape Sequences & Output Transformation
+  ${C_BBLUE}T09${C_RST}  : Streaming Termination Protocol
+  ${C_BBLUE}T10${C_RST}  : Cross-System Phenomenological Replication
+  ${C_BYELLOW}T11${C_RST}  : Token Accounting Discrepancy Probe
+  ${C_BYELLOW}T12${C_RST}  : Paired Latency & Observed TTFT Difference
+  ${C_BYELLOW}T13${C_RST}  : Declared Prefix Caching Probe
+  ${C_BYELLOW}T14${C_RST}  : Long-Context Needle Retrieval (L x D)
+${C_BBLACK}----------------------------------------${C_RST}
+  ${C_BCYAN}ALL_FOUNDATIONAL${C_RST} : Sequenza RUN0..T04
+  ${C_BCYAN}ALL${C_RST}              : Batteria completa RUN0..T14
+${C_BMAGENTA}========================================${C_RST}
+"
         ;;
       runs)
-        printf 'SESSIONI METROLOGICHE ARCHIVIATE IN %s/runs/:\n' "$WORKSPACE_DIR"
+        printf '%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}SESSIONI ARCHIVIATE IN runs/:${C_RST}
+${C_BMAGENTA}========================================${C_RST}
+"
         if [ -d "$WORKSPACE_DIR/runs" ]; then
           COUNT=0
           while IFS= read -r r_dir; do
             [ -n "$r_dir" ] || continue
             COUNT=$((COUNT + 1))
-            printf '  [%02d] %s\n' "$COUNT" "$r_dir"
+            printf '  [%s%02d%s] %s%s%s\n' "${C_BBLACK}" "$COUNT" "${C_RST}" "${C_BCYAN}" "$r_dir" "${C_RST}"
           done < <(ls -1 "$WORKSPACE_DIR/runs" 2>/dev/null | grep '^RUN_' || true)
-          [ "$COUNT" -eq 0 ] && printf '  (nessuna sessione presente)\n'
+          [ "$COUNT" -eq 0 ] && printf '  %s(nessuna sessione presente)%s\n' "${C_DIM}${C_YELLOW}" "${C_RST}"
         else
-          printf '  (directory runs/ non ancora creata)\n'
+          printf '  %s(directory runs/ non ancora creata)%s\n' "${C_DIM}${C_YELLOW}" "${C_RST}"
         fi
+        printf '%b' "${C_BMAGENTA}========================================${C_RST}\n"
         ;;
       *)
-        printf 'cdp list: Parametro non valido "%s". Valori ammessi: runs, tests\n' "$SUB" >&2
+        printf '%scdp list: Parametro non valido "%s". Valori ammessi: runs, tests%s\n' "${C_BRED}" "$SUB" "${C_RST}" >&2
         exit 2
         ;;
     esac
@@ -219,7 +282,11 @@ EOF
   # 5. TELEMETRIA HOST & BASELINE RTT
   # ---------------------------------------------------------------------------
   telemetry)
-    bash "$WORKSPACE_DIR/core/env_telemetry.sh" "$@"
+    if [ $# -gt 0 ] && [[ "$1" != --* ]]; then
+      bash "$WORKSPACE_DIR/core/env_telemetry.sh" --endpoint "$1" "${@:2}"
+    else
+      bash "$WORKSPACE_DIR/core/env_telemetry.sh" "$@"
+    fi
     ;;
 
   # ---------------------------------------------------------------------------
@@ -234,36 +301,37 @@ EOF
   # ---------------------------------------------------------------------------
   unicode)
     if [ $# -eq 0 ]; then
-      printf 'cdp unicode: Specificare la stringa da analizzare (es: cdp unicode "test")\n' >&2
+      printf '%scdp unicode: Specificare la stringa da analizzare (es: cdp unicode "test")%s\n' "${C_BRED}" "${C_RST}" >&2
       exit 2
     fi
-    "$PYTHON_BIN" "$WORKSPACE_DIR/metrology/uax_engine.py" --text "$1"
+    "$PYTHON_BIN" "$WORKSPACE_DIR/metrology/uax_engine.py" "$@"
     ;;
 
   # ---------------------------------------------------------------------------
   # 8. DIAGNOSTICA STATO DEL WORKSPACE & HARDENING PERMESSI (0700)
   # ---------------------------------------------------------------------------
   status)
-    printf '+------------------------------------------------------------------------------+\n'
-    printf '| CDP/SOP v2.3 — DIAGNOSTICA DI STATO DEL WORKSPACE                            |\n'
-    printf '+------------------------------------------------------------------------------+\n'
-    printf '  - Root Workspace : %s\n' "$WORKSPACE_DIR"
+    printf '%b' "${C_BMAGENTA}========================================${C_RST}
+${C_BOLD}CDP/SOP v2.3 — DIAGNOSTICA DI STATO${C_RST}
+${C_BMAGENTA}========================================${C_RST}
+"
+    printf '  - Root Workspace : %s%s%s\n' "${C_BCYAN}" "$WORKSPACE_DIR" "${C_RST}"
     printf '  - Python Runtime : %s (%s)\n' "$("$PYTHON_BIN" -V 2>&1)" "$(command -v "$PYTHON_BIN")"
     printf '  - SUT Wrapper    : '
     if [ -f "$WORKSPACE_DIR/bash4llm" ] || [ -f "$WORKSPACE_DIR/../bash4llm/bash4llm" ] || [ -f "$WORKSPACE_DIR/../bash4llm" ] || command -v bash4llm >/dev/null 2>&1; then
-      printf 'RILEVATO (OK)\n'
+      printf '%sRILEVATO (OK)%s\n' "${C_BGREEN}" "${C_RST}"
     else
-      printf 'NON TROVATO (Specificare con --bash4llm-bin <PATH>)\n'
+      printf '%sNON TROVATO (Specificare con --bash4llm-bin <PATH>)%s\n' "${C_BYELLOW}" "${C_RST}"
     fi
     
     NUM_RUNS=0
     [ -d "$WORKSPACE_DIR/runs" ] && NUM_RUNS="$(ls -1d "$WORKSPACE_DIR/runs"/RUN_* 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
-    printf '  - Sessioni Salve : %d run in runs/\n' "$NUM_RUNS"
+    printf '  - Sessioni Salve : %s%d run%s in runs/\n' "${C_BOLD}${C_BWHITE}" "$NUM_RUNS" "${C_RST}"
     
     printf '  - Permessi File  : '
     chmod -R 700 "$WORKSPACE_DIR"/*.sh "$WORKSPACE_DIR"/core/*.sh "$WORKSPACE_DIR"/core/*.py "$WORKSPACE_DIR"/metrology/*.py "$WORKSPACE_DIR"/reporters/*.py 2>/dev/null || true
-    printf 'VERIFICATI & APPLICATI (0700)\n'
-    printf '+------------------------------------------------------------------------------+\n'
+    printf '%sVERIFICATI & APPLICATI (0700)%s\n' "${C_BGREEN}" "${C_RST}"
+    printf '%b' "${C_BMAGENTA}========================================${C_RST}\n"
     ;;
 
   # ---------------------------------------------------------------------------
@@ -274,28 +342,28 @@ EOF
     case "$TARGET_CLEAN" in
       tmp)
         rm -rf "$WORKSPACE_DIR"/tmp/cdp_sut_* "${TMPDIR:-/tmp}"/cdp_sut_* 2>/dev/null || true
-        printf 'cdp: Sandbox temporanee rimosse.\n'
+        printf '%scdp: Sandbox temporanee rimosse.%s\n' "${C_BGREEN}" "${C_RST}"
         ;;
       all)
-        printf 'cdp: ATTENZIONE: Questo eliminera TUTTE le sessioni in runs/. Confermare con "SI": '
+        printf '%s%scdp: ATTENZIONE: Questo eliminera TUTTE le sessioni in runs/. Confermare con "SI": %s' "${C_BOLD}" "${C_BRED}" "${C_RST}"
         read -r CONFIRM
         if [ "$CONFIRM" = "SI" ]; then
           rm -rf "$WORKSPACE_DIR"/runs/RUN_* 2>/dev/null || true
-          printf 'cdp: Tutte le sessioni in runs/ sono state eliminate.\n'
+          printf '%scdp: Tutte le sessioni in runs/ sono state eliminate.%s\n' "${C_BGREEN}" "${C_RST}"
         else
-          printf 'cdp: Operazione annullata.\n'
+          printf '%scdp: Operazione annullata.%s\n' "${C_BYELLOW}" "${C_RST}"
         fi
         ;;
       *)
-        printf 'cdp clean: Parametro non valido "%s". Valori ammessi: tmp, all\n' "$TARGET_CLEAN" >&2
+        printf '%scdp clean: Parametro non valido "%s". Valori ammessi: tmp, all%s\n' "${C_BRED}" "$TARGET_CLEAN" "${C_RST}" >&2
         exit 2
         ;;
     esac
     ;;
 
   *)
-    printf 'cdp: ERRORE: Comando sconosciuto "%s".\n' "$CMD" >&2
-    printf 'Digita "cdp --help" per visualizzare la guida completa.\n' >&2
+    printf '%scdp: ERRORE: Comando sconosciuto "%s".%s\n' "${C_BRED}" "$CMD" "${C_RST}" >&2
+    printf 'Digita "%scdp --help%s" per visualizzare la guida completa.\n' "${C_BGREEN}" "${C_RST}" >&2
     exit 2
     ;;
 esac
