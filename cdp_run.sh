@@ -116,6 +116,7 @@ VAULT_PASS=""
 DRY_RUN_FLAG=0
 DEBUG_FLAG=0
 N_TRIALS=5
+PACING_SEC=4
 
 usage() {
   cat <<'EOF'
@@ -132,6 +133,7 @@ Configurazione SUT (Se omesse, delegate alla configurazione attiva di bash4llm):
   --mde <FLOAT>        Minima Differenza Rilevante in ms per T12 (default: 100.0).
   --bash4llm-bin <PATH> Percorso dell'eseguibile SUT (bash4llm).
   --vault-ctx <PASS>   Master passcode per sblocco OpenSSL Vault in bash4llm.
+  --pacing <SEC>       Intervallo di sicurezza in secondi tra chiamate API per rate limit (default: 4).
 
 Controlli di Esecuzione:
   --dry-run            Simulazione locale senza traffico HTTP.
@@ -178,6 +180,11 @@ while [ $# -gt 0 ]; do
       MDE_MS="$2"
       shift 2
       ;;
+    --pacing)
+      [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --pacing richiede un numero intero di secondi%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
+      PACING_SEC="$2"
+      shift 2
+      ;;
     --bash4llm-bin)
       [ $# -ge 2 ] || { printf '%scdp_run: ERRORE: --bash4llm-bin richiede un percorso%s\n' "${C_BRED}" "${C_RST}" >&2; exit 2; }
       BASH4LLM_BIN="$2"
@@ -214,6 +221,31 @@ if [ -z "$BASH4LLM_BIN" ] || [ ! -f "$BASH4LLM_BIN" ]; then
   printf '%scdp_run: ERRORE CRITICO: Eseguibile SUT non trovato. Specificare --bash4llm-bin <PATH>%s\n' "${C_BRED}" "${C_RST}" >&2
   exit 15
 fi
+
+# ==============================================================================
+# FUNZIONE METROLOGICA: PACING & FEEDBACK VISIVO CONTROLLATO (TTY-Safe)
+# ==============================================================================
+pacing_countdown() {
+  local raw_sec="${1:-0}"
+  local reason="${2:-Attesa pacing rate-limit API}"
+  [ "$DRY_RUN_FLAG" -eq 1 ] && return 0
+
+  local wait_sec=0
+  if [[ "$raw_sec" =~ ^[0-9]+$ ]]; then
+    wait_sec="$raw_sec"
+  fi
+  [ "$wait_sec" -le 0 ] && return 0
+
+  if [ -t 1 ]; then
+    for (( s=wait_sec; s>=1; s-- )); do
+      printf '  %s⏳ %s: %s%ds%s rimanenti...%s\r' "${C_DIM}${C_YELLOW}" "$reason" "${C_BOLD}${C_BYELLOW}" "$s" "${C_DIM}${C_YELLOW}" "${C_RST}"
+      sleep 1
+    done
+    printf '\r%78s\r' ""
+  else
+    sleep "$wait_sec"
+  fi
+}
 
 run_single_test_unit() {
   local target_test="$1"
@@ -255,7 +287,7 @@ ${C_BBLACK}----------------------------------------${C_RST}
   # ---------------------------------------------------------------------------
   # [3/6] ESECUZIONE TRIAL SPERIMENTALI SUL SUT ADAPTER
   # ---------------------------------------------------------------------------
-  printf 'cdp_run: %s[3/6]%s Esecuzione trial SUT...\n' "${C_BCYAN}" "${C_RST}"
+  printf 'cdp_run: %s[3/6]%s Esecuzione trial SUT (pacing: %ds)...\n' "${C_BCYAN}" "${C_RST}" "$PACING_SEC"
   local -a trial_meta_files=()
   local ttft_pairs_file="$run_dir/ttft_pairs.json"
   local -a latency_pairs_arr=()
@@ -300,8 +332,12 @@ ${C_BBLACK}----------------------------------------${C_RST}
       [ "$DRY_RUN_FLAG" -eq 1 ] && { t_opts_a+=( --dry-run ); t_opts_b+=( --dry-run ); }
       [ "$DEBUG_FLAG" -eq 1 ] && { t_opts_a+=( --debug ); t_opts_b+=( --debug ); }
 
+      printf '  - Trial T12 %s%02d%s/%s%02d%s (Condizione A)...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
       bash "$CORE_DIR/sut_adapter.sh" "${t_opts_a[@]}" >/dev/null 2>&1 || true
-      sleep 0.5 2>/dev/null || true
+
+      pacing_countdown "$PACING_SEC" "Pacing tra Condizione A e B"
+
+      printf '  - Trial T12 %s%02d%s/%s%02d%s (Condizione B)...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
       bash "$CORE_DIR/sut_adapter.sh" "${t_opts_b[@]}" >/dev/null 2>&1 || true
 
       local ttft_a ttft_b
@@ -309,7 +345,10 @@ ${C_BBLACK}----------------------------------------${C_RST}
       ttft_b="$(jq -r '.timing.ttft_observed_e2e_ms // 0' "$sub_b/trial_metadata.json" 2>/dev/null || echo 0)"
       latency_pairs_arr+=( "[$ttft_a, $ttft_b]" )
       trial_meta_files+=( "$sub_a/trial_metadata.json" "$sub_b/trial_metadata.json" )
+
+      [ "$trial_idx" -lt "$N_TRIALS" ] && pacing_countdown "$PACING_SEC" "Pacing tra coppie T12"
     done
+    printf '  - Esecuzione completata per %s%d%s coppie di misura T12.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
     printf '[%s]\n' "$(IFS=,; echo "${latency_pairs_arr[*]}")" > "$ttft_pairs_file"
 
   else
@@ -348,8 +387,11 @@ ${C_BBLACK}----------------------------------------${C_RST}
           [ "$DRY_RUN_FLAG" -eq 1 ] && m_opts+=( --dry-run )
           [ "$DEBUG_FLAG" -eq 1 ] && m_opts+=( --debug )
 
+          printf '  - Trial %s%02d%s/%s%02d%s [%s] in corso...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}" "${C_BYELLOW}${m_key}${C_RST}"
           bash "$CORE_DIR/sut_adapter.sh" "${m_opts[@]}" >/dev/null 2>&1 || true
           trial_meta_files+=( "$sub_matrix_dir/trial_metadata.json" )
+
+          pacing_countdown "$PACING_SEC" "Pacing sottomatrice ${m_key}"
         done
       else
         local target_prompt expected_sha
@@ -383,7 +425,11 @@ ${C_BBLACK}----------------------------------------${C_RST}
         printf '  - Trial %s%02d%s/%s%02d%s in corso...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
         bash "$CORE_DIR/sut_adapter.sh" "${t_adapter_opts[@]}" >/dev/null 2>&1 || true
         trial_meta_files+=( "$trial_base_dir/trial_metadata.json" )
-        sleep 0.2 2>/dev/null || true
+
+        # Pacing esteso per T14 (evita saturazione TPM per payload grandi)
+        local curr_pacing="$PACING_SEC"
+        [ "$target_test" = "T14" ] && curr_pacing=$(( PACING_SEC + 2 ))
+        [ "$trial_idx" -lt "$N_TRIALS" ] && pacing_countdown "$curr_pacing" "Pacing tra trial ${target_test}"
       fi
     done
     printf '  - Esecuzione completata per %s%d%s cicli di prova.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
@@ -415,6 +461,10 @@ ${C_BBLACK}----------------------------------------${C_RST}
 
           if [ -n "$u_sha_t" ] && [ "$u_sha_t" = "$out_sha_t" ]; then
             k_success=$((k_success + 1))
+          elif [ -n "$exp_canary" ] && [ -f "$trial_art_dir_t/O_parsed.txt" ]; then
+            if grep -F -q "$exp_canary" "$trial_art_dir_t/O_parsed.txt" 2>/dev/null; then
+              k_success=$((k_success + 1))
+            fi
           elif [ -n "$exp_canary" ] && [ -f "$trial_art_dir_t/C_resp_app.json" ]; then
             if grep -F -q "$exp_canary" "$trial_art_dir_t/C_resp_app.json" 2>/dev/null; then
               k_success=$((k_success + 1))
@@ -425,7 +475,7 @@ ${C_BBLACK}----------------------------------------${C_RST}
         fi
       fi
     done
-    [ "$n_valid" -eq 0 ] && n_valid="$N_TRIALS"
+
     "$PYTHON_BIN" "$METROLOGY_DIR/cdp_stats.py" --out "$metrics_summary_file" binomial --k "$k_success" --n "$n_valid"
   fi
 
@@ -533,19 +583,27 @@ printf '%b' "${C_BMAGENTA}========================================${C_RST}
 ${C_BOLD}CDP/SOP v2.3 METROLOGY HARNESS${C_RST}
 SUT Invocator : ${C_BGREEN}$(basename "$BASH4LLM_BIN")${C_RST}
 Execution Mode: ${C_BOLD}$([ "$DRY_RUN_FLAG" -eq 1 ] && echo "${C_BYELLOW}DRY-RUN (Simulato)" || echo "${C_BGREEN}LIVE NETWORK")${C_RST}
+Pacing Safety : ${C_BOLD}${C_BYELLOW}${PACING_SEC}s${C_RST} per trial
 ${C_BMAGENTA}========================================${C_RST}\n"
+
+COOL_DOWN_SEC=$(( PACING_SEC + 1 ))
 
 case "$TEST_ID" in
   ALL_FOUNDATIONAL)
     run_single_test_unit "RUN0"
+    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
     run_single_test_unit "T01"
+    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
     run_single_test_unit "T02"
+    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
     run_single_test_unit "T03"
+    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
     run_single_test_unit "T04"
     ;;
   ALL)
     run_single_test_unit "RUN0"
     for t in T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14; do
+      pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
       run_single_test_unit "$t"
     done
     ;;
