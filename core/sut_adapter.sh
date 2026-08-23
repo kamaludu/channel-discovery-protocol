@@ -24,6 +24,7 @@
 #      - C_req_app.bin : Payload grezzo inviato sulla rete (JSON/HTTP body).
 #      - C_resp_app.json : Risposta raw ricevuta dal server.
 #      - cURL.log : Traccia di trasporto/TLS ed header HTTP.
+#      - O_parsed.txt : Testo puro estratto dalla risposta.
 #   3. Tutte le sezioni metrologiche (DAG di provenienza SHA-256, predicati V3,
 #      calcolo TTFT ed emissione di trial_metadata.json) rimangono invariate.
 # ==============================================================================
@@ -307,10 +308,12 @@ ELAPSED_TTFT_MS=$(( T_END_EPOCH_MS - T_START_EPOCH_MS ))
 HARVEST_REQ_FILE="$ARTIFACT_DIR/C_req_app.bin"
 HARVEST_RESP_FILE="$ARTIFACT_DIR/C_resp_app.json"
 HARVEST_CURL_LOG="$ARTIFACT_DIR/cURL.log"
+HARVEST_PARSED_OUT="$ARTIFACT_DIR/O_parsed.txt"
 
 : > "$HARVEST_REQ_FILE"
 : > "$HARVEST_RESP_FILE"
 : > "$HARVEST_CURL_LOG"
+: > "$HARVEST_PARSED_OUT"
 
 # Scansione deterministica sia nella root di B4L_TMPDIR che nelle sottodirectory generate
 SEARCH_DIRS=( "$B4L_TMPDIR" )
@@ -370,9 +373,9 @@ C_REQ_UNICODE_SHA256="null"
 if [ -s "$HARVEST_REQ_FILE" ] && jq -e . "$HARVEST_REQ_FILE" >/dev/null 2>&1; then
   C_REQ_UNICODE_EXTRACTED="$(jq -r '
     if .messages then
-      ([.messages[] | select(.role=="user") | if (.content | type) == "string" then .content else (.content[0].text // "") end] | last) // ""
+      ([.messages[] | select(.role=="user") | if (.content | type) == "string" then .content else ([.content[]?.text // empty] | join("")) end] | last) // ""
     elif .contents then
-      ([.contents[] | select(.role=="user") | .parts[0].text] | last) // ""
+      ([.contents[] | select(.role=="user") | ([.parts[]?.text // empty] | join(""))] | last) // ""
     elif .inputs then
       if (.inputs | type) == "string" then .inputs else (.inputs | tostring) end
     elif .prompt then
@@ -390,16 +393,26 @@ if [ -s "$HARVEST_REQ_FILE" ] && jq -e . "$HARVEST_REQ_FILE" >/dev/null 2>&1; th
   fi
 fi
 
-# Estrazione dell'output terminale deserializzato (O_parsed)
+# Estrazione dell'output terminale deserializzato (O_parsed) con supporto multi-part
 PARSED_OUTPUT_TEXT=""
 OUTPUT_PARSED_SHA256="null"
 
 if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
   PARSED_OUTPUT_TEXT="$(jq -r '
     if .choices and (.choices|length > 0) then
-      (.choices[0].message.content // .choices[0].delta.content // .choices[0].text // "")
+      if (.choices[0].message.content | type) == "string" then
+        .choices[0].message.content
+      elif .choices[0].message.content then
+        ([.choices[0].message.content[]?.text // empty] | join(""))
+      elif .choices[0].delta.content then
+        .choices[0].delta.content
+      elif .choices[0].text then
+        .choices[0].text
+      else
+        ""
+      end
     elif .candidates and (.candidates|length > 0) then
-      (.candidates[0].content.parts[0].text // "")
+      ([.candidates[0].content.parts[]?.text // empty] | join(""))
     elif .output_text then
       .output_text
     elif .generated_text then
@@ -410,10 +423,9 @@ if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; 
   ' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
 
   if [ -n "$PARSED_OUTPUT_TEXT" ]; then
-    TMP_PARSED_FILE="$SANDBOX_DIR/parsed_out.txt"
-    printf '%s' "$PARSED_OUTPUT_TEXT" > "$TMP_PARSED_FILE"
-    OUTPUT_PARSED_SHA256="$(calc_sha256_file "$TMP_PARSED_FILE")"
-    rm -f "$TMP_PARSED_FILE" 2>/dev/null || true
+    printf '%s' "$PARSED_OUTPUT_TEXT" > "$HARVEST_PARSED_OUT"
+    chmod 600 "$HARVEST_PARSED_OUT" 2>/dev/null || true
+    OUTPUT_PARSED_SHA256="$(calc_sha256_file "$HARVEST_PARSED_OUT")"
   fi
 fi
 
@@ -484,14 +496,29 @@ if [ "$P_APP_REQUEST_OBSERVED" = "true" ]; then
   fi
 fi
 
-if [ -s "$HARVEST_RESP_FILE" ] && [ "$B4L_EXIT_CODE" -eq 0 ]; then
-  P_RESPONSE_CORRELATION=true
+# Rilevamento univoco di errori nel payload JSON o negli status HTTP
+HAS_JSON_ERROR=false
+if [ -s "$HARVEST_RESP_FILE" ] && jq -e 'has("error")' "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
+  HAS_JSON_ERROR=true
+fi
+
+# Correlazione di risposta formale: payload presente, status 2xx, exit code 0 e nessun oggetto error
+if [ -s "$HARVEST_RESP_FILE" ] && [ "$B4L_EXIT_CODE" -eq 0 ] && [ "$HAS_JSON_ERROR" = "false" ]; then
+  if [ "$HTTP_STATUS_EXTRACTED" = "null" ] || [[ "$HTTP_STATUS_EXTRACTED" =~ ^2[0-9]{2}$ ]]; then
+    P_RESPONSE_CORRELATION=true
+  fi
 fi
 
 V3_CLASSIFICATION="V3-0a (No-Capture)"
 V3_MOTIVATION="Nessun traffico applicativo catturato sul confine di invocazione."
 
-if [ "$P_APP_REQUEST_OBSERVED" = "true" ] && [ "$P_FINGERPRINT_MATCH" = "true" ] && [ "$P_RESPONSE_CORRELATION" = "true" ] && [ "$P_HARNESS_ISOLATION" = "true" ]; then
+if [ "$HTTP_STATUS_EXTRACTED" = "429" ] || grep -qi "RESOURCE_EXHAUSTED\|Rate limit\|429" "$HARVEST_CURL_LOG" 2>/dev/null; then
+  V3_CLASSIFICATION="V3-1 (Rate-Limited / 429)"
+  V3_MOTIVATION="Richiesta respinta dal server per superamento quote o rate limit (HTTP 429)."
+elif [ "$HAS_JSON_ERROR" = "true" ] || [ "$B4L_EXIT_CODE" -ne 0 ] || [[ "$HTTP_STATUS_EXTRACTED" =~ ^[45][0-9]{2}$ ]]; then
+  V3_CLASSIFICATION="V3-1 (API Error / Non-2xx Response)"
+  V3_MOTIVATION="Risposta del server con errore HTTP ${HTTP_STATUS_EXTRACTED:-<non_rilevato>} o payload JSON di errore."
+elif [ "$P_APP_REQUEST_OBSERVED" = "true" ] && [ "$P_FINGERPRINT_MATCH" = "true" ] && [ "$P_RESPONSE_CORRELATION" = "true" ] && [ "$P_HARNESS_ISOLATION" = "true" ]; then
   V3_CLASSIFICATION="V3-3 (App-Layer Verified)"
   V3_MOTIVATION="Payload C_req_app materializzato, C_req_unicode verificato e correlazione risposta confermata."
 elif [ "$P_APP_REQUEST_OBSERVED" = "true" ]; then
@@ -508,12 +535,12 @@ TRIAL_CLASSIFICATION="FAILED_TRIAL"
 if [ "$V3_CLASSIFICATION" = "V3-3 (App-Layer Verified)" ] && [ -n "$PARSED_OUTPUT_TEXT" ]; then
   OUTPUT_PROVENANCE="VERIFIED"
   TRIAL_CLASSIFICATION="VALID_TRIAL"
-elif [ "$B4L_EXIT_CODE" -eq 0 ] && [ -n "$PARSED_OUTPUT_TEXT" ]; then
+elif [ "$B4L_EXIT_CODE" -eq 0 ] && [ "$HAS_JSON_ERROR" = "false" ] && [ -n "$PARSED_OUTPUT_TEXT" ]; then
   OUTPUT_PROVENANCE="ATTRIBUTED"
   TRIAL_CLASSIFICATION="BEHAVIORAL_ONLY_TRIAL"
-elif [ "$B4L_EXIT_CODE" -ne 0 ]; then
-  TRIAL_CLASSIFICATION="FAILED_TRIAL"
+else
   OUTPUT_PROVENANCE="UNKNOWN"
+  TRIAL_CLASSIFICATION="FAILED_TRIAL"
 fi
 
 # ==============================================================================
