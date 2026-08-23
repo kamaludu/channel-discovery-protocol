@@ -100,12 +100,12 @@ class CampaignDashboard:
         lines.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
 
         for s in self.sessions_data:
-            manifest = s["manifest"]
-            classification = s["classification"]
-            metrics = s["metrics"]
+            manifest = s.get("manifest", {})
+            classification = s.get("classification", {})
+            metrics = s.get("metrics", {})
 
             t_id = manifest.get("test_id", "UNRESOLVED")
-            sut = manifest.get("sut_formal_tuple", {})
+            sut = manifest.get("sut_formal_tuple", {}) or {}
             prov = sut.get("provider") or "UNRESOLVED"
             model = sut.get("model_id") or "UNRESOLVED"
             regime = manifest.get("regime", "R1_PILOT")
@@ -114,11 +114,11 @@ class CampaignDashboard:
             if t_id == "T12":
                 bar_d = metrics.get("point_estimate_bar_D_ms", "N/A")
                 ci_str = metrics.get("primary_parametric_ci_95", {}).get("formatted", "N/A")
-                orr_str = f"bar_D={bar_d}ms"
+                orr_str = f"bar_D={bar_d}ms" if bar_d is not None else "N/A"
             else:
                 orr_val = metrics.get("point_estimate_ORR_b", classification.get("point_estimate_ORR_b"))
                 orr_str = f"{orr_val:.4f}" if isinstance(orr_val, (int, float)) else "N/A"
-                ci_block = metrics.get("confidence_interval_95_clopper_pearson", {})
+                ci_block = metrics.get("confidence_interval_95_clopper_pearson", {}) or {}
                 lower = ci_block.get("lower")
                 upper = ci_block.get("upper")
                 if lower is not None and upper is not None:
@@ -143,7 +143,7 @@ class CampaignDashboard:
         Costruisce la matrice di decadimento 2D (L x D) e il profilo grafico ASCII
         per le sessioni del test T14 (Long-Context Needle Retrieval).
         """
-        t14_sessions = [s for s in self.sessions_data if s["manifest"].get("test_id") == "T14"]
+        t14_sessions = [s for s in self.sessions_data if s.get("manifest", {}).get("test_id") == "T14"]
         if not t14_sessions:
             return "Nessuna sessione T14 (Long-Context Retrieval) registrata nell'archivio runs/."
 
@@ -158,7 +158,7 @@ class CampaignDashboard:
         # Raggruppamento per SUT formale (Provider / Model)
         sut_groups: Dict[str, List[Dict[str, Any]]] = {}
         for s in t14_sessions:
-            sut = s["manifest"].get("sut_formal_tuple", {})
+            sut = s.get("manifest", {}).get("sut_formal_tuple", {}) or {}
             prov = sut.get("provider") or "UNRESOLVED"
             model = sut.get("model_id") or "UNRESOLVED"
             key = f"{prov} / {model}"
@@ -174,11 +174,11 @@ class CampaignDashboard:
             all_depths: Set[float] = set()
 
             for s in sessions:
-                stim = s.get("stimulus", {})
-                metrics = s.get("metrics", {})
+                stim = s.get("stimulus", {}) or {}
+                metrics = s.get("metrics", {}) or {}
                 l_val = int(stim.get("length_k", 4))
                 d_val = float(stim.get("depth", 0.5))
-                rate_val = metrics.get("point_estimate_ORR_b", 1.0)
+                rate_val = metrics.get("point_estimate_ORR_b")
                 rate = float(rate_val) if isinstance(rate_val, (int, float)) else 0.0
 
                 all_lengths.add(l_val)
@@ -274,4 +274,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
