@@ -292,32 +292,31 @@ def a_priori_sample_size_r2(
 
 
 def main():
-    common_parser = argparse.ArgumentParser(add_help=False)
-    common_parser.add_argument("--out", default=argparse.SUPPRESS, help="Percorso file JSON di output")
-
     parser = argparse.ArgumentParser(
-        description="CDP/SOP v2.3 Metrology Statistical Engine",
-        parents=[common_parser]
+        description="CDP/SOP v2.3 Metrology Statistical Engine"
     )
-    parser.set_defaults(out=None)
+    parser.add_argument("--out", default=None, help="Percorso file JSON di output")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    p_binom = subparsers.add_parser("binomial", parents=[common_parser], help="Intervallo Esatto Clopper-Pearson")
+    p_binom = subparsers.add_parser("binomial", help="Intervallo Esatto Clopper-Pearson")
     p_binom.add_argument("-k", "--k", type=int, required=True, help="Numero di successi osservati")
     p_binom.add_argument("-n", "--n", type=int, required=True, help="Dimensione campionaria totale")
-    p_binom.add_argument("--alpha", type=float, default=0.05, help="Livello di significativita (default: 0.05 per CI 95%)")
+    p_binom.add_argument("--alpha", type=float, default=0.05, help="Livello di significativita (default: 0.05 per CI 95%%)")
+    p_binom.add_argument("--out", default=argparse.SUPPRESS, help="Percorso file JSON di output")
 
-    p_ttft = subparsers.add_parser("paired-ttft", parents=[common_parser], help="Analisi Appaiata TTFT (T12)")
+    p_ttft = subparsers.add_parser("paired-ttft", help="Analisi Appaiata TTFT (T12)")
     p_ttft.add_argument("--pairs-json", type=str, required=True, help="File JSON contenente l'array di coppie [A, B]")
     p_ttft.add_argument("--mde", type=float, default=100.0, help="Minima Differenza Rilevante in ms (default: 100.0)")
     p_ttft.add_argument("--alpha", type=float, default=0.05, help="Livello di significativita (default: 0.05)")
     p_ttft.add_argument("--bootstrap-reps", type=int, default=10000, help="Numero di replicazioni bootstrap (default: 10000)")
+    p_ttft.add_argument("--out", default=argparse.SUPPRESS, help="Percorso file JSON di output")
 
-    p_power = subparsers.add_parser("power", parents=[common_parser], help="Power Analysis Regime R2")
+    p_power = subparsers.add_parser("power", help="Power Analysis Regime R2")
     p_power.add_argument("--mde", type=float, required=True, help="Minima Differenza Rilevante target")
     p_power.add_argument("--pilot-sd", type=float, required=True, help="Deviazione standard riscontrata nella fase pilota R1")
     p_power.add_argument("--power", type=float, default=0.80, help="Potenza statistica desiderata 1 - beta (default: 0.80)")
+    p_power.add_argument("--out", default=argparse.SUPPRESS, help="Percorso file JSON di output")
 
     args = parser.parse_args()
 
@@ -331,8 +330,9 @@ def main():
 
     output_str = json.dumps(res, indent=2, ensure_ascii=False)
 
-    if args.out:
-        out_p = Path(args.out)
+    out_file = getattr(args, "out", None)
+    if out_file:
+        out_p = Path(out_file)
         out_p.parent.mkdir(parents=True, exist_ok=True)
         out_p.write_text(output_str, encoding="utf-8")
         out_p.chmod(0o600)
