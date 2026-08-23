@@ -28,6 +28,8 @@ RUNS_BASE_DIR="$WORKSPACE_DIR/runs"
 BASH4LLM_BIN=""
 if [ -f "$WORKSPACE_DIR/bash4llm" ]; then
   BASH4LLM_BIN="$WORKSPACE_DIR/bash4llm"
+elif [ -f "$WORKSPACE_DIR/../bash4llm/bash4llm" ]; then
+  BASH4LLM_BIN="$WORKSPACE_DIR/../bash4llm/bash4llm"
 elif [ -f "$WORKSPACE_DIR/../bash4llm" ]; then
   BASH4LLM_BIN="$WORKSPACE_DIR/../bash4llm"
 elif command -v bash4llm >/dev/null 2>&1; then
@@ -281,7 +283,11 @@ run_single_test_unit() {
           "TEST_PROBE"
         ' "$trial_stim_json" 2>/dev/null || echo "TEST_PROBE")"
 
-        expected_sha="$(jq -r '.target.sha256 // .sha256 // empty' "$trial_stim_json" 2>/dev/null || echo "")"
+        if jq -e '.behavioral_prompt or .probe_prompt or .turn_1_inject or .session_a_inject' "$trial_stim_json" >/dev/null 2>&1; then
+          expected_sha=""
+        else
+          expected_sha="$(jq -r '.target.sha256 // .sha256 // empty' "$trial_stim_json" 2>/dev/null || echo "")"
+        fi
 
         local t_adapter_opts=(
           --bash4llm-bin "$BASH4LLM_BIN"
@@ -308,7 +314,7 @@ run_single_test_unit() {
   local metrics_summary_file="$run_dir/metrics_summary.json"
 
   if [ "$target_test" = "T12" ]; then
-    "$PYTHON_BIN" "$METROLOGY_DIR/cdp_stats.py" paired-ttft --pairs-json "$ttft_pairs_file" --mde "$MDE_MS" --out "$metrics_summary_file"
+    "$PYTHON_BIN" "$METROLOGY_DIR/cdp_stats.py" --out "$metrics_summary_file" paired-ttft --pairs-json "$ttft_pairs_file" --mde "$MDE_MS"
   else
     local k_success=0 n_valid=0
     for t_file in "${trial_meta_files[@]}"; do
@@ -338,7 +344,7 @@ run_single_test_unit() {
       fi
     done
     [ "$n_valid" -eq 0 ] && n_valid="$N_TRIALS"
-    "$PYTHON_BIN" "$METROLOGY_DIR/cdp_stats.py" binomial --k "$k_success" --n "$n_valid" --out "$metrics_summary_file"
+    "$PYTHON_BIN" "$METROLOGY_DIR/cdp_stats.py" --out "$metrics_summary_file" binomial --k "$k_success" --n "$n_valid"
   fi
 
   printf 'cdp_run: [5/6] Esecuzione Decision DAG deterministico...\n'
