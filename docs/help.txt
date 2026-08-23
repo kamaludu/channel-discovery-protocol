@@ -3,6 +3,7 @@
 # CDP/SOP v2.3 Manuale di Aiuto & Quick Reference
 # File: docs/help.txt
 # Component: Documentation & User Guidance
+# Standard: CDP v2.3 & SOP v2.3
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
@@ -43,19 +44,22 @@ SINTASSI GENERALE:
         ALL              : Esegue l'intera suite da RUN0 a T14
 
       Opzioni di esecuzione:
-        --provider <NAME>      Provider target (groq, gemini, mistral, huggingface, openrouter).
-        --model <MODEL_ID>     Model ID esplicito per override configurazione.
+        --provider <NAME>      Provider target (es. groq, gemini, mistral, openrouter).
+                               Se omesso, delega alla configurazione attiva di bash4llm.
+        --model <MODEL_ID>     Model ID esplicito per l'esecuzione.
+                               Se omesso, delega al modello default di bash4llm.
         --regime <pilot|conf>  Regime statistico: pilot (N=5) | confirmatory (N=20). Default: pilot.
-        --endpoint <URL>       Endpoint URL per misura telemetrica RTT di baseline.
+        --endpoint <URL>       Endpoint URL per stima telemetrica baseline RTT.
         --mde <FLOAT>          Minima Differenza Rilevante in ms per T12 (default: 100.0).
-        --vault-ctx <PASS>     Passcode master per sblocco in memoria del Vault OpenSSL.
-        --dry-run              Simulazione metrologica senza traffico HTTP reale.
-        --debug                Preserva le directory sandbox temporanee.
+        --bash4llm-bin <PATH>  Percorso esplicito dell'eseguibile SUT (bash4llm).
+        --vault-ctx <PASS>     Passcode master per sblocco non interattivo del Vault OpenSSL.
+        --dry-run              Simulazione locale senza traffico HTTP di rete.
+        --debug                Preserva le directory sandbox temporanee per analisi.
 
   cdp summary [--out <FILE>]
       Genera il Dossier di Campagna consolidato con il Quadro Sinottico
       comparativo e le matrici/curve di decadimento per T14.
-      Default output: ~/cdp_workspace/DOSSIER_CAMPAGNA.md
+      Default output: <WORKSPACE_DIR>/DOSSIER_CAMPAGNA.md
 
   cdp show [latest | RUN_ID | PERCORSO_FILE]
       Visualizza con il visualizzatore di sistema il referto SOTU Master
@@ -64,9 +68,9 @@ SINTASSI GENERALE:
   cdp list [runs | tests]
       Elenca le sessioni storiche archiviate in runs/ oppure il catalogo test.
 
-  cdp telemetry [ENDPOINT_URL]
-      Esegue la sonda telemetrica dell'ambiente host Termux (hardware, kernel,
-      locale C.UTF-8, versioni interpreti) e calcola la mediana RTT di rete.
+  cdp telemetry [ENDPOINT_URL | --endpoint <URL>]
+      Esegue la sonda telemetrica dell'ambiente host (hardware, kernel release,
+      locale, versioni interpreti/librerie) e calcola la mediana RTT di rete.
 
 ========================================
 2. UTILITY METROLOGICHE RAPIDE (ZERO-PIP STANDALONE)
@@ -76,12 +80,20 @@ SINTASSI GENERALE:
       Calcola l'intervallo di confidenza esatto di Clopper-Pearson al 95%
       su distribuzione Beta per k successi su N prove valide.
 
-  cdp stats power --mde <DELTA_MIN> --sd <SD_PILOTA> [--power <FLOAT>]
+  cdp stats paired-ttft --pairs-json <FILE> [--mde <MS>] [--alpha <FLOAT>]
+      Esegue l'analisi statistica delle differenze appaiate di latenza (TTFT)
+      con intervallo parametrico Student-t, Bootstrap percentile e test MDE (T12).
+
+  cdp stats power --mde <DELTA_MIN> --pilot-sd <SD_PILOTA> [--power <FLOAT>]
       Esegue la Power Analysis a priori per dimensionare il campione N (Regime R2).
 
   cdp unicode "<TESTO>"
-      Analisi immediata della stringa: codepoints, categorie generali Unicode,
+      Analisi della stringa: codepoints, categorie generali Unicode
       e scomposizione nelle 4 forme normalizzate UAX #15 (NFC, NFD, NFKC, NFKD).
+      Supporta anche:
+        cdp unicode --file <PATH>
+        cdp unicode --compare <STR1> <STR2> [--form <NFC|NFD|NFKC|NFKD>]
+        cdp unicode --telemetry
 
 ========================================
 3. AMMINISTRAZIONE E DIAGNOSTICA DEL WORKSPACE
