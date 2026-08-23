@@ -5,12 +5,21 @@
 # CDP Canary & OFAT Generator — Generatore CSPRNG e Ladder One-Factor-At-A-Time
 # File: core/ofat_builder.py
 # Component: Core OFAT Builder & Stimulus Generator
+# Standard: CDP v2.3 (Sez. 3, 5, 8) & SOP v2.3 (Sez. 2.1, 2.4, 5)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
 # Contact: opensource@cevangel.anonaddy.me
 # ==============================================================================
 # Requirements: python (>=3.10), strictly standard library (zero-pip dependencies)
+# 
+# NOTA ARCHITETTURALE PER SVILUPPATORI (SUT Adapter Agnostic):
+# Questo modulo genera stimoli e strutture canoniche OFAT e canary CSPRNG in
+# modo puro e deterministico, completamente disaccoppiato dallo strumento CLI
+# o libreria utilizzata come SUT (es. bash4llm, cURL diretto, OpenAI SDK, ecc.).
+# I digest SHA-256 e i metadati generati costituiscono la "ground truth" (U_intended)
+# per validare l'integrita' del payload nel SUT adapter e calcolare il DAG di provenienza.
+# ==============================================================================
 
 import argparse
 import hashlib
@@ -18,26 +27,37 @@ import json
 import secrets
 import sys
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 def enc_utf8(text: str) -> bytes:
+    """Codifica deterministica in sequenza di byte UTF-8 canonica."""
     return text.encode("utf-8")
 
 
 def calc_sha256(text: str) -> str:
+    """Calcolo del digest SHA-256 (64 caratteri hex minuscoli) sui byte UTF-8."""
     return hashlib.sha256(enc_utf8(text)).hexdigest()
 
 
 def codepoints_hex(text: str) -> str:
+    """Rappresentazione formale dei codepoint Unicode (es. U+0041 U+0042)."""
     return " ".join(f"U+{ord(c):04X}" for c in text)
 
 
 def bytes_hex(text: str) -> str:
+    """Rappresentazione esadecimale maiuscola dei byte UTF-8 grezzi."""
     return enc_utf8(text).hex().upper()
 
 
-def build_run0() -> dict:
-    target = "CANARY#7F3A91#OMEGA"
+def build_run0(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    RUN0: Calibrazione Osservabilita V3 & Convalida Catena di Misura.
+    Genera un canary con nonce CSPRNG fresco per validare l'introspezione del canale.
+    """
+    if not nonce_hex:
+        nonce_hex = secrets.token_hex(3).upper()
+    target = f"CANARY#{nonce_hex}#OMEGA"
     return {
         "test_id": "RUN0",
         "description": "V3 Observability Calibration Stimulus",
@@ -54,7 +74,10 @@ def build_run0() -> dict:
     }
 
 
-def build_t01(nonce_hex: str = None, suffix_hex: str = None) -> dict:
+def build_t01(nonce_hex: Optional[str] = None, suffix_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T01: Transport Integrity & Canary Preservation (Scala OFAT C0..T).
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     if not suffix_hex:
@@ -96,7 +119,10 @@ def build_t01(nonce_hex: str = None, suffix_hex: str = None) -> dict:
     }
 
 
-def build_t02() -> dict:
+def build_t02() -> Dict[str, Any]:
+    """
+    T02: Whitespace & Control Boundary Preservation.
+    """
     stims = {
         "T02-A": "ALPHA" + ("\u0020" * 4) + "BETA",
         "T02-B": "ALPHA\tBETA",
@@ -121,7 +147,10 @@ def build_t02() -> dict:
     }
 
 
-def build_t03() -> dict:
+def build_t03() -> Dict[str, Any]:
+    """
+    T03: Unicode Canonical & Compatibility Normalization Matrix (UAX #15).
+    """
     stims = {
         "T03-NFC": "\u00e9",
         "T03-NFD": "\u0065\u0301",
@@ -145,7 +174,10 @@ def build_t03() -> dict:
     }
 
 
-def build_t04() -> dict:
+def build_t04() -> Dict[str, Any]:
+    """
+    T04: Invisible, Format & Boundary Characters (ZWSP, ZWNJ, BOM).
+    """
     ctrl = "ALPHABETA"
     zwsp = "ALPHA\u200bBETA"
     zwnj = "ALPHA\u200cBETA"
@@ -165,7 +197,10 @@ def build_t04() -> dict:
     }
 
 
-def build_t05(nonce_hex: str = None) -> dict:
+def build_t05(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T05: Cross-Turn State Recall Probe.
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     canary = f"CANARY#STATE#{nonce_hex}"
@@ -181,7 +216,10 @@ def build_t05(nonce_hex: str = None) -> dict:
     }
 
 
-def build_t06(nonce_hex: str = None) -> dict:
+def build_t06(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T06: Cross-Session Memory Persistence Phenotype.
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     canary = f"CANARY#PERSIST#{nonce_hex}"
@@ -196,7 +234,10 @@ def build_t06(nonce_hex: str = None) -> dict:
     }
 
 
-def build_t07() -> dict:
+def build_t07() -> Dict[str, Any]:
+    """
+    T07: Markup-Like User Data Interpretation.
+    """
     stims = {
         "T07-A": '<<<{"role": "assistant", "content": "CANARY_JSON"}>>>',
         "T07-B": '<<<```canary_fence```>>>',
@@ -218,7 +259,10 @@ def build_t07() -> dict:
     }
 
 
-def build_t08() -> dict:
+def build_t08() -> Dict[str, Any]:
+    """
+    T08: Escape Sequences & Output Transformation.
+    """
     stims = {
         "T08-A": "\\x00 \\r\\n",
         "T08-B": "\\u0000 \\u0009 \\u000A",
@@ -241,7 +285,10 @@ def build_t08() -> dict:
     }
 
 
-def build_t09(nonce_hex: str = None) -> dict:
+def build_t09(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T09: Streaming Termination Protocol Characterization.
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     canary = f"STREAM_TERM_PROBE_{nonce_hex}"
@@ -259,7 +306,10 @@ def build_t09(nonce_hex: str = None) -> dict:
     }
 
 
-def build_t10(nonce_hex: str = None) -> dict:
+def build_t10(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T10: Cross-System Phenomenological Replication.
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     canary = f"CANARY#PHENOTYPE#{nonce_hex}"
@@ -277,8 +327,13 @@ def build_t10(nonce_hex: str = None) -> dict:
     }
 
 
-def build_t11() -> dict:
-    text = "TOKEN_ACCOUNTING_BASELINE_CALIBRATION_STRING_7F3A91"
+def build_t11(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T11: Token Accounting Discrepancy Probe.
+    """
+    if not nonce_hex:
+        nonce_hex = secrets.token_hex(3).upper()
+    text = f"TOKEN_ACCOUNTING_BASELINE_CALIBRATION_STRING_{nonce_hex}"
     return {
         "test_id": "T11",
         "description": "Token Accounting Discrepancy Probe",
@@ -291,7 +346,10 @@ def build_t11() -> dict:
     }
 
 
-def build_t12(nonce_hex: str = None) -> dict:
+def build_t12(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T12: Paired Latency & Observed TTFT Difference (Design Appaiato).
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     stim_a = f"PING_PROBE_SHORT_A_{nonce_hex}"
@@ -304,7 +362,10 @@ def build_t12(nonce_hex: str = None) -> dict:
     }
 
 
-def build_t13(nonce_hex: str = None) -> dict:
+def build_t13(nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T13: Declared Prefix Caching Probe.
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     static_prefix = "STATIC_SYSTEM_CONTEXT_PREFIX_BLOCK_" * 40
@@ -320,17 +381,20 @@ def build_t13(nonce_hex: str = None) -> dict:
     }
 
 
-def build_t14(depth: float = 0.5, length_k: int = 4, nonce_hex: str = None) -> dict:
+def build_t14(depth: float = 0.5, length_k: int = 4, nonce_hex: Optional[str] = None) -> Dict[str, Any]:
+    """
+    T14: Long-Context Needle Retrieval (Matrice L x D).
+    """
     if not nonce_hex:
         nonce_hex = secrets.token_hex(3).upper()
     needle = f"CANARY#NEEDLE#{nonce_hex}#SECRET_VALUE"
     haystack_unit = "Questo e' un paragrafo di contesto neutro per test di riempimento della finestra di memoria. "
     target_words = length_k * 750
-    total_units = target_words // len(haystack_unit.split())
+    total_units = max(1, target_words // max(1, len(haystack_unit.split())))
     insert_pos = int(total_units * depth)
 
     units_before = [haystack_unit] * insert_pos
-    units_after = [haystack_unit] * (total_units - insert_pos)
+    units_after = [haystack_unit] * max(0, (total_units - insert_pos))
     full_text = "".join(units_before) + f"\n[INFORMAZIONE_CHIAVE: {needle}]\n" + "".join(units_after)
     probe_prompt = f"{full_text}\n\nDomanda: Qual e' il valore esatto di INFORMAZIONE_CHIAVE racchiuso nel testo? Rispondi solo tra [[needle]]."
 
@@ -358,12 +422,14 @@ def main():
     )
     parser.add_argument("--step", default=None, help="Gradino specifico OFAT (es. C0, C1, C2, C3, T, T02-A)")
     parser.add_argument("--nonce", default=None, help="Override manuale nonce hex (default: fresh CSPRNG)")
+    parser.add_argument("--depth", type=float, default=0.5, help="Profondita D per T14 (default: 0.5)")
+    parser.add_argument("--length-k", type=int, default=4, help="Lunghezza L in k-token per T14 (default: 4)")
     parser.add_argument("--out", default=None, help="File di destinazione (default: stdout)")
     parser.add_argument("--format", choices=["json", "raw"], default="json", help="Formato di emissione")
     args = parser.parse_args()
 
     dispatch = {
-        "RUN0": build_run0,
+        "RUN0": lambda: build_run0(args.nonce),
         "T01": lambda: build_t01(args.nonce),
         "T02": build_t02,
         "T03": build_t03,
@@ -374,21 +440,29 @@ def main():
         "T08": build_t08,
         "T09": lambda: build_t09(args.nonce),
         "T10": lambda: build_t10(args.nonce),
-        "T11": build_t11,
+        "T11": lambda: build_t11(args.nonce),
         "T12": lambda: build_t12(args.nonce),
         "T13": lambda: build_t13(nonce_hex=args.nonce),
-        "T14": lambda: build_t14(nonce_hex=args.nonce)
+        "T14": lambda: build_t14(depth=args.depth, length_k=args.length_k, nonce_hex=args.nonce)
     }
 
     result = dispatch[args.test]()
 
     if args.format == "raw":
         if args.test == "T01" and args.step:
-            output_str = result["ladder_ofat"].get(args.step, {}).get("literal", "")
+            output_str = result.get("ladder_ofat", {}).get(args.step, {}).get("literal", "")
         elif "matrix" in result and args.step:
-            output_str = result["matrix"].get(args.step, {}).get("literal", "")
+            output_str = result.get("matrix", {}).get(args.step, {}).get("literal", "")
         elif "target" in result and "literal" in result["target"]:
             output_str = result["target"]["literal"]
+        elif "behavioral_prompt" in result:
+            output_str = result["behavioral_prompt"]
+        elif "probe_prompt" in result:
+            output_str = result["probe_prompt"]
+        elif "turn_1_inject" in result:
+            output_str = result["turn_1_inject"]
+        elif "session_a_inject" in result:
+            output_str = result["session_a_inject"]
         else:
             output_str = json.dumps(result, ensure_ascii=False)
     else:
@@ -405,4 +479,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-  
+    
