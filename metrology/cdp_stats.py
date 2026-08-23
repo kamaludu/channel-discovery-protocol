@@ -153,11 +153,32 @@ def student_t_inv_two_tailed(alpha: float, df: int, tol: float = 1e-7) -> float:
 def clopper_pearson_ci(k: int, n: int, alpha: float = 0.05) -> Dict[str, Any]:
     """
     Calcolo esatto dell'Intervallo di Confidenza Clopper-Pearson al (1 - alpha)%.
+    Gestisce in modo formalmente corretto e trasparente il caso n = 0 (nessun trial valido).
     """
-    if n <= 0:
-        raise ValueError("La dimensione campionaria n deve essere > 0")
-    if k < 0 or k > n:
-        raise ValueError("k deve essere compreso tra 0 e n")
+    if n < 0:
+        raise ValueError("La dimensione campionaria n non puo essere negativa")
+    if k < 0:
+        raise ValueError("Il numero di successi k non puo essere negativo")
+    if n > 0 and k > n:
+        raise ValueError("k non puo essere maggiore di n")
+
+    if n == 0:
+        return {
+            "mensurand": "ORR_b",
+            "sample_size_n": 0,
+            "successes_k": 0,
+            "point_estimate": None,
+            "point_estimate_ORR_b": None,
+            "confidence_level": 1.0 - alpha,
+            "ci_lower": None,
+            "ci_upper": None,
+            "confidence_interval_95_clopper_pearson": {
+                "lower": None,
+                "upper": None
+            },
+            "ci_formatted": "N/A",
+            "method": "Exact Binomial Clopper-Pearson (Undefined: N=0 valid trials)"
+        }
 
     point_estimate = k / float(n)
 
@@ -200,7 +221,30 @@ def paired_difference_ttft(
     """
     n = len(pairs)
     if n < 2:
-        raise ValueError("L'analisi appaiata richiede almeno N = 2 coppie")
+        return {
+            "sample_size_pairs_N": n,
+            "point_estimate_bar_D_ms": None,
+            "std_dev_s_D_ms": None,
+            "standard_error_ms": None,
+            "degrees_of_freedom": max(0, n - 1),
+            "primary_parametric_ci_95": {
+                "lower_ms": None,
+                "upper_ms": None,
+                "formatted": "N/A"
+            },
+            "secondary_bootstrap_ci_95": {
+                "replications": bootstrap_reps,
+                "lower_ms": None,
+                "upper_ms": None,
+                "formatted": "N/A"
+            },
+            "mde_relevance_evaluation": {
+                "mde_delta_min_ms": mde_ms,
+                "is_statistically_significant": False,
+                "is_practically_relevant": False,
+                "verdict": "INSUFFICIENT_PAIRED_DATA"
+            }
+        }
 
     diffs: List[float] = []
     for p in pairs:
@@ -342,4 +386,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
