@@ -4,7 +4,7 @@
 # CDP Orchestratore di Test & Runner Master — Esecutore Metrologico per RUN0 e Suite T01-T14
 # File: cdp_run.sh
 # Component: Core Test Orchestrator & Execution Engine
-# Standard: CDP v2.3 (Sez. 4, 5, 8, 9) & SOP v2.3 (Sez. 1, 2, 3, 4, 5)
+# Standard: CDP v2.3 (Sez. 4, 5, 8, 9) & SOP v2.3 (Sez. 1, 2, 3, 4, 5, 6) & CDP-SAC v1.0
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
@@ -18,14 +18,11 @@
 # Questo script coordina il ciclo di vita metrologico completo di ciascun test:
 #   [1/6] Acquisizione telemetria host (core/env_telemetry.sh).
 #   [2/6] Generazione stimoli OFAT e ground truth SHA-256 (core/ofat_builder.py).
-#   [3/6] Esecuzione trial sul SUT adapter (core/sut_adapter.sh -> SUT / bash4llm).
+#   [3/6] Esecuzione trial sul SUT adapter (core/sut_adapter.sh -> SUT / bash4llm)
+#         con monitoraggio e Metrological Circuit Breaker attivo.
 #   [4/6] Calcolo statistico (metrology/cdp_stats.py: Clopper-Pearson o Paired TTFT).
 #   [5/6] Decision DAG & classificazione epistemica (metrology/claim_classifier.py).
 #   [6/6] Compilazione Scheda Master SOTU v2.3 (reporters/sotu_master.py).
-#
-# Integra una palette cromatica semantica ANSI sicura (TTY-safe & NO_COLOR compliant).
-# Non sono presenti provider, modelli, endpoint o digest SHA-256 cablati:
-# ogni parametro viene propagato dinamicamente o rilevato a runtime dal SUT.
 # ==============================================================================
 
 set -euo pipefail
@@ -105,7 +102,7 @@ if ! command -v python3 >/dev/null 2>&1 && command -v python >/dev/null 2>&1; th
   PYTHON_BIN="python"
 fi
 
-# Inizializzazione parametri (Nessun default statico forzato)
+# Inizializzazione parametri
 TEST_ID="RUN0"
 REGIME="R1_PILOT"
 PROVIDER=""
@@ -126,7 +123,7 @@ Target e Regime:
   --test <ID>          RUN0, T01..T14, ALL_FOUNDATIONAL, ALL (default: RUN0).
   --regime <REGIME>    pilot (N=5) | confirmatory (N=20). Default: pilot.
 
-Configurazione SUT (Se omesse, delegate alla configurazione attiva di bash4llm):
+Configurazione SUT (Se omesse, delegate all'introspezione attiva del SUT):
   --provider <NAME>    Nome del provider target (es. groq, gemini, mistral, openrouter).
   --model <MODEL_ID>   Model ID esplicito per l'esecuzione.
   --endpoint <URL>     Endpoint URL per stima telemetrica baseline RTT.
@@ -247,12 +244,32 @@ pacing_countdown() {
   fi
 }
 
+# ==============================================================================
+# FUNZIONE METROLOGICA: CONTROLLO STATO RATE-LIMIT & CIRCUIT BREAKER
+# ==============================================================================
+check_trial_rate_limited() {
+  local trial_meta_path="$1"
+  if [ -f "$trial_meta_path" ]; then
+    if jq -e '
+      .error_diagnostics.is_rate_limited == true or
+      .evaluation.trial_classification == "RATE_LIMITED_TRIAL" or
+      .audit_trail.http_status == 429 or
+      .error_diagnostics.error_status == "RESOURCE_EXHAUSTED"
+    ' "$trial_meta_path" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# ==============================================================================
+# ESECUZIONE UNITA METROLOGICA SINGOLA (6 STADI)
+# ==============================================================================
 run_single_test_unit() {
   local target_test="$1"
   local ts_now nonce_hex run_id run_dir artifacts_dir
   ts_now="$(date +%Y%m%d_%H%M%S)"
   
-  # Generazione CSPRNG deterministica del nonce senza dipendenze binarie esterne
   nonce_hex="$("$PYTHON_BIN" -c 'import secrets; print(secrets.token_hex(3).upper())' 2>/dev/null || printf '%06X' "$RANDOM")"
 
   run_id="RUN_${ts_now}_${target_test}_${nonce_hex}"
@@ -267,6 +284,8 @@ ${C_BOLD}TEST UNIT: ${C_BGREEN}${target_test}${C_RST} (${C_CYAN}${REGIME}${C_RST
 ${C_BBLACK}Storage  : ${run_id}${C_RST}
 ${C_BBLACK}----------------------------------------${C_RST}
 "
+
+  local CIRCUIT_BREAKER_TRIGGERED=0
 
   # ---------------------------------------------------------------------------
   # [1/6] TELEMETRIA HOST & BASELINE RTT
@@ -311,8 +330,15 @@ ${C_BBLACK}----------------------------------------${C_RST}
     [ "$DRY_RUN_FLAG" -eq 1 ] && adapter_opts+=( --dry-run )
     [ "$DEBUG_FLAG" -eq 1 ] && adapter_opts+=( --debug )
 
-    bash "$CORE_DIR/sut_adapter.sh" "${adapter_opts[@]}" >/dev/null 2>&1 || true
-    trial_meta_files+=( "$trial_art_dir/trial_metadata.json" )
+    local ad_rc=0
+    bash "$CORE_DIR/sut_adapter.sh" "${adapter_opts[@]}" >/dev/null 2>&1 || ad_rc=$?
+    local t0_meta="$trial_art_dir/trial_metadata.json"
+    trial_meta_files+=( "$t0_meta" )
+
+    if [ "$ad_rc" -eq 16 ] || check_trial_rate_limited "$t0_meta"; then
+      CIRCUIT_BREAKER_TRIGGERED=1
+      printf '  %s⚠️  CIRCUIT BREAKER: Rilevato Rate Limit / Quota esaurita su RUN0.%s\n' "${C_BOLD}${C_BYELLOW}" "${C_RST}"
+    fi
 
   elif [ "$target_test" = "T12" ]; then
     local stim_a stim_b
@@ -333,22 +359,40 @@ ${C_BBLACK}----------------------------------------${C_RST}
       [ "$DEBUG_FLAG" -eq 1 ] && { t_opts_a+=( --debug ); t_opts_b+=( --debug ); }
 
       printf '  - Trial T12 %s%02d%s/%s%02d%s (Condizione A)...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
-      bash "$CORE_DIR/sut_adapter.sh" "${t_opts_a[@]}" >/dev/null 2>&1 || true
+      local ad_rc_a=0
+      bash "$CORE_DIR/sut_adapter.sh" "${t_opts_a[@]}" >/dev/null 2>&1 || ad_rc_a=$?
+      trial_meta_files+=( "$sub_a/trial_metadata.json" )
+
+      if [ "$ad_rc_a" -eq 16 ] || check_trial_rate_limited "$sub_a/trial_metadata.json"; then
+        CIRCUIT_BREAKER_TRIGGERED=1
+        break
+      fi
 
       pacing_countdown "$PACING_SEC" "Pacing tra Condizione A e B"
 
       printf '  - Trial T12 %s%02d%s/%s%02d%s (Condizione B)...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
-      bash "$CORE_DIR/sut_adapter.sh" "${t_opts_b[@]}" >/dev/null 2>&1 || true
+      local ad_rc_b=0
+      bash "$CORE_DIR/sut_adapter.sh" "${t_opts_b[@]}" >/dev/null 2>&1 || ad_rc_b=$?
+      trial_meta_files+=( "$sub_b/trial_metadata.json" )
+
+      if [ "$ad_rc_b" -eq 16 ] || check_trial_rate_limited "$sub_b/trial_metadata.json"; then
+        CIRCUIT_BREAKER_TRIGGERED=1
+        break
+      fi
 
       local ttft_a ttft_b
       ttft_a="$(jq -r '.timing.ttft_observed_e2e_ms // 0' "$sub_a/trial_metadata.json" 2>/dev/null || echo 0)"
       ttft_b="$(jq -r '.timing.ttft_observed_e2e_ms // 0' "$sub_b/trial_metadata.json" 2>/dev/null || echo 0)"
       latency_pairs_arr+=( "[$ttft_a, $ttft_b]" )
-      trial_meta_files+=( "$sub_a/trial_metadata.json" "$sub_b/trial_metadata.json" )
 
       [ "$trial_idx" -lt "$N_TRIALS" ] && pacing_countdown "$PACING_SEC" "Pacing tra coppie T12"
     done
-    printf '  - Esecuzione completata per %s%d%s coppie di misura T12.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
+
+    if [ "$CIRCUIT_BREAKER_TRIGGERED" -eq 1 ]; then
+      printf '  %s⚠️  CIRCUIT BREAKER: Rilevato Rate Limit / Quota esaurita su T12. Interruzione trial anticipata.%s\n' "${C_BOLD}${C_BYELLOW}" "${C_RST}"
+    else
+      printf '  - Esecuzione completata per %s%d%s coppie di misura T12.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
+    fi
     printf '[%s]\n' "$(IFS=,; echo "${latency_pairs_arr[*]}")" > "$ttft_pairs_file"
 
   else
@@ -388,8 +432,15 @@ ${C_BBLACK}----------------------------------------${C_RST}
           [ "$DEBUG_FLAG" -eq 1 ] && m_opts+=( --debug )
 
           printf '  - Trial %s%02d%s/%s%02d%s [%s] in corso...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}" "${C_BYELLOW}${m_key}${C_RST}"
-          bash "$CORE_DIR/sut_adapter.sh" "${m_opts[@]}" >/dev/null 2>&1 || true
-          trial_meta_files+=( "$sub_matrix_dir/trial_metadata.json" )
+          local ad_rc_m=0
+          bash "$CORE_DIR/sut_adapter.sh" "${m_opts[@]}" >/dev/null 2>&1 || ad_rc_m=$?
+          local m_meta="$sub_matrix_dir/trial_metadata.json"
+          trial_meta_files+=( "$m_meta" )
+
+          if [ "$ad_rc_m" -eq 16 ] || check_trial_rate_limited "$m_meta"; then
+            CIRCUIT_BREAKER_TRIGGERED=1
+            break 2
+          fi
 
           pacing_countdown "$PACING_SEC" "Pacing sottomatrice ${m_key}"
         done
@@ -423,16 +474,27 @@ ${C_BBLACK}----------------------------------------${C_RST}
         [ "$DEBUG_FLAG" -eq 1 ] && t_adapter_opts+=( --debug )
 
         printf '  - Trial %s%02d%s/%s%02d%s in corso...\r' "${C_BCYAN}" "$trial_idx" "${C_RST}" "${C_BWHITE}" "$N_TRIALS" "${C_RST}"
-        bash "$CORE_DIR/sut_adapter.sh" "${t_adapter_opts[@]}" >/dev/null 2>&1 || true
-        trial_meta_files+=( "$trial_base_dir/trial_metadata.json" )
+        local ad_rc_t=0
+        bash "$CORE_DIR/sut_adapter.sh" "${t_adapter_opts[@]}" >/dev/null 2>&1 || ad_rc_t=$?
+        local t_meta="$trial_base_dir/trial_metadata.json"
+        trial_meta_files+=( "$t_meta" )
 
-        # Pacing esteso per T14 (evita saturazione TPM per payload grandi)
+        if [ "$ad_rc_t" -eq 16 ] || check_trial_rate_limited "$t_meta"; then
+          CIRCUIT_BREAKER_TRIGGERED=1
+          break
+        fi
+
         local curr_pacing="$PACING_SEC"
         [ "$target_test" = "T14" ] && curr_pacing=$(( PACING_SEC + 2 ))
         [ "$trial_idx" -lt "$N_TRIALS" ] && pacing_countdown "$curr_pacing" "Pacing tra trial ${target_test}"
       fi
     done
-    printf '  - Esecuzione completata per %s%d%s cicli di prova.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
+
+    if [ "$CIRCUIT_BREAKER_TRIGGERED" -eq 1 ]; then
+      printf '  %s⚠️  CIRCUIT BREAKER: Rilevato Rate Limit / Quota esaurita su %s. Interruzione trial anticipata.%s\n' "${C_BOLD}${C_BYELLOW}" "$target_test" "${C_RST}"
+    else
+      printf '  - Esecuzione completata per %s%d%s cicli di prova.          \n' "${C_BGREEN}" "$N_TRIALS" "${C_RST}"
+    fi
   fi
 
   # ---------------------------------------------------------------------------
@@ -499,19 +561,43 @@ ${C_BBLACK}----------------------------------------${C_RST}
   local sotu_report_file="$run_dir/SOTU_MASTER_REPORT.md"
 
   local sample_dag_file="$run_dir/dag_sample_fallback.json"
-  if [ "${#trial_meta_files[@]}" -gt 0 ] && [ -f "${trial_meta_files[0]}" ]; then
-    sample_dag_file="${trial_meta_files[0]}"
-  else
-    printf '{"sut":{"provider":"UNRESOLVED","model_id":"UNRESOLVED"}, "provenance_dag":{}, "audit_trail":{}}\n' > "$sample_dag_file"
+  local found_sample=0
+
+  # Priorita 1: identificare il file di trial che contiene error_diagnostics attivo
+  for t_cand in "${trial_meta_files[@]}"; do
+    if [ -f "$t_cand" ]; then
+      if jq -e '.error_diagnostics.is_error == true or .error_diagnostics.is_rate_limited == true or .audit_trail.http_status == 429' "$t_cand" >/dev/null 2>&1; then
+        sample_dag_file="$t_cand"
+        found_sample=1
+        break
+      fi
+    fi
+  done
+
+  # Priorita 2: se nessun errore registrato, selezionare il primo trial disponibile
+  if [ "$found_sample" -eq 0 ] && [ "${#trial_meta_files[@]}" -gt 0 ]; then
+    for t_cand in "${trial_meta_files[@]}"; do
+      if [ -f "$t_cand" ]; then
+        sample_dag_file="$t_cand"
+        found_sample=1
+        break
+      fi
+    done
+  fi
+
+  if [ "$found_sample" -eq 0 ]; then
+    printf '{"sut":{"provider":"UNRESOLVED","model_id":"UNRESOLVED","declared_runtime_version":"NOT_OBSERVED"}, "provenance_dag":{}, "audit_trail":{}, "error_diagnostics":{}}\n' > "$sample_dag_file"
   fi
 
   # Estrazione reale dei metadati SUT osservati dal trial
-  local obs_provider obs_model
+  local obs_provider obs_model obs_runtime
   obs_provider="$(jq -r '.sut.provider // "UNRESOLVED"' "$sample_dag_file" 2>/dev/null || echo "UNRESOLVED")"
   obs_model="$(jq -r '.sut.model_id // "UNRESOLVED"' "$sample_dag_file" 2>/dev/null || echo "UNRESOLVED")"
+  obs_runtime="$(jq -r '.sut.declared_runtime_version // "external-cli-wrapper"' "$sample_dag_file" 2>/dev/null || echo "external-cli-wrapper")"
 
   [ "$obs_provider" = "UNRESOLVED" ] && [ -n "$PROVIDER" ] && obs_provider="$PROVIDER"
   [ "$obs_model" = "UNRESOLVED" ] && [ -n "$MODEL_ID" ] && obs_model="$MODEL_ID"
+  [ "$obs_runtime" = "null" ] || [ -z "$obs_runtime" ] && obs_runtime="external-cli-wrapper"
 
   jq -c -n \
     --arg proto "CDP-v2.3 / SOP-v2.3" \
@@ -521,6 +607,7 @@ ${C_BBLACK}----------------------------------------${C_RST}
     --arg prov "$obs_provider" \
     --arg ep "${ENDPOINT_URL:-NOT_OBSERVED}" \
     --arg mod "$obs_model" \
+    --arg r_ver "$obs_runtime" \
     --slurpfile telem "$telem_json_file" \
     --slurpfile dag_sample "$sample_dag_file" \
     '{
@@ -532,7 +619,7 @@ ${C_BBLACK}----------------------------------------${C_RST}
         provider: $prov,
         endpoint_url: (if $ep == "NOT_OBSERVED" then null else $ep end),
         model_id: $mod,
-        declared_runtime: "external-cli-wrapper",
+        declared_runtime: $r_ver,
         sampling: {
           temperature: ($dag_sample[0].sut.temperature // null),
           max_tokens: ($dag_sample[0].sut.max_tokens // null),
@@ -541,7 +628,8 @@ ${C_BBLACK}----------------------------------------${C_RST}
       },
       host_telemetry: ($telem[0] // {}),
       provenance_dag: ($dag_sample[0].provenance_dag // {}),
-      audit_trail: ($dag_sample[0].audit_trail // {})
+      audit_trail: ($dag_sample[0].audit_trail // {}),
+      error_diagnostics: ($dag_sample[0].error_diagnostics // {})
     }' > "$run_manifest_file"
   chmod 600 "$run_manifest_file" 2>/dev/null || true
 
@@ -549,6 +637,7 @@ ${C_BBLACK}----------------------------------------${C_RST}
     --manifest "$run_manifest_file" \
     --classification "$claim_class_file" \
     --metrics "$metrics_summary_file" \
+    --trial-json "$sample_dag_file" \
     --out "$sotu_report_file"
 
   if [ "$target_test" = "RUN0" ]; then
@@ -564,6 +653,7 @@ ${C_BBLACK}----------------------------------------${C_RST}
   case "$final_verdict" in
     *PERFECT*|*CONFORMANT*) verdict_color="${C_BGREEN}" ;;
     *VARIANCE*|*DIVERGENCE*) verdict_color="${C_BYELLOW}" ;;
+    *RATE_LIMITED*|*QUOTA*) verdict_color="${C_BYELLOW}" ;;
     *FAILED*|*INVALID*) verdict_color="${C_BRED}" ;;
     *) verdict_color="${C_BCYAN}" ;;
   esac
@@ -577,38 +667,59 @@ ${C_BMAGENTA}========================================${C_RST}
   - Vettore Evidenza  : ${C_BYELLOW}${final_ev_vector}${C_RST}
   - Report Salvato in : ${C_BCYAN}${sotu_report_file}${C_RST}
 ${C_BMAGENTA}========================================${C_RST}\n\n"
+
+  if [ "$CIRCUIT_BREAKER_TRIGGERED" -eq 1 ]; then
+    return 16
+  fi
+  return 0
 }
 
+# ==============================================================================
+# ENTRYPOINT ESECUZIONE ORCHESTRATA
+# ==============================================================================
 printf '%b' "${C_BMAGENTA}========================================${C_RST}
 ${C_BOLD}CDP/SOP v2.3 METROLOGY HARNESS${C_RST}
 SUT Invocator : ${C_BGREEN}$(basename "$BASH4LLM_BIN")${C_RST}
 Execution Mode: ${C_BOLD}$([ "$DRY_RUN_FLAG" -eq 1 ] && echo "${C_BYELLOW}DRY-RUN (Simulato)" || echo "${C_BGREEN}LIVE NETWORK")${C_RST}
 Pacing Safety : ${C_BOLD}${C_BYELLOW}${PACING_SEC}s${C_RST} per trial
+Circuit Breaker: ${C_BGREEN}ATTIVO (HTTP 429 / RESOURCE_EXHAUSTED)${C_RST}
 ${C_BMAGENTA}========================================${C_RST}\n"
 
 COOL_DOWN_SEC=$(( PACING_SEC + 1 ))
 
+GLOBAL_CB_STATUS=0
+
 case "$TEST_ID" in
   ALL_FOUNDATIONAL)
-    run_single_test_unit "RUN0"
-    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
-    run_single_test_unit "T01"
-    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
-    run_single_test_unit "T02"
-    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
-    run_single_test_unit "T03"
-    pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
-    run_single_test_unit "T04"
+    for t_found in RUN0 T01 T02 T03 T04; do
+      run_single_test_unit "$t_found" || GLOBAL_CB_STATUS=$?
+      if [ "$GLOBAL_CB_STATUS" -eq 16 ]; then
+        printf '%s⚠️  CIRCUIT BREAKER GLOBALE: Sequenza ALL_FOUNDATIONAL interrotta per quota esaurita.%s\n\n' "${C_BOLD}${C_BYELLOW}" "${C_RST}"
+        exit 16
+      fi
+      pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
+    done
     ;;
   ALL)
-    run_single_test_unit "RUN0"
+    run_single_test_unit "RUN0" || GLOBAL_CB_STATUS=$?
+    if [ "$GLOBAL_CB_STATUS" -eq 16 ]; then
+      printf '%s⚠️  CIRCUIT BREAKER GLOBALE: Batteria ALL interrotta su RUN0 per quota esaurita.%s\n\n' "${C_BOLD}${C_BYELLOW}" "${C_RST}"
+      exit 16
+    fi
     for t in T01 T02 T03 T04 T05 T06 T07 T08 T09 T10 T11 T12 T13 T14; do
       pacing_countdown "$COOL_DOWN_SEC" "Raffreddamento tra Test Unit"
-      run_single_test_unit "$t"
+      run_single_test_unit "$t" || GLOBAL_CB_STATUS=$?
+      if [ "$GLOBAL_CB_STATUS" -eq 16 ]; then
+        printf '%s⚠️  CIRCUIT BREAKER GLOBALE: Batteria ALL interrotta su %s per quota esaurita.%s\n\n' "${C_BOLD}${C_BYELLOW}" "$t" "${C_RST}"
+        exit 16
+      fi
     done
     ;;
   *)
-    run_single_test_unit "$TEST_ID"
+    run_single_test_unit "$TEST_ID" || GLOBAL_CB_STATUS=$?
+    if [ "$GLOBAL_CB_STATUS" -eq 16 ]; then
+      exit 16
+    fi
     ;;
 esac
 
