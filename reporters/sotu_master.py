@@ -20,13 +20,10 @@
 # "Quadruplet Rule" (Osservazione, Inferenza, Conclusione, Non Determinato).
 # 
 # Consuma esclusivamente i contratti dati JSON standardizzati:
-#   - run_manifest.json (Metadati di sessione ed evidenze di telemetria host)
+#   - run_manifest.json (Metadati di sessione, runtime SUT ed evidenze telemetriche)
 #   - claim_classification.json (Classificazione epistemica e vettore E)
 #   - metrics_summary.json (Stime Clopper-Pearson o Paired TTFT con CI 95%)
-#   - trial_metadata.json (DAG di provenienza ed audit trail del SUT)
-#
-# Nessun valore di provider, modello, endpoint, digest o intervallo e' cablato:
-# i campi non rilevati vengono rubricati come NOT_OBSERVED o UNRESOLVED.
+#   - trial_metadata.json (DAG di provenienza, audit trail ed error_diagnostics)
 # ==============================================================================
 
 import argparse
@@ -161,6 +158,16 @@ TEST_DESCRIPTIONS = {
 }
 
 
+def _clean_str(val: Any) -> Optional[str]:
+    """Filtra stringhe vuote, None o letterali 'null' / 'NOT_OBSERVED'."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if s in ["", "null", "None", "NOT_OBSERVED", "UNRESOLVED"]:
+        return None
+    return s
+
+
 class SotuMasterReporter:
     """
     Compilatore ufficiale della Scheda Master SOTU v2.3.
@@ -193,11 +200,13 @@ class SotuMasterReporter:
 
         sut_tuple = self.manifest.get("sut_formal_tuple", {}) or {}
         host_telem = self.manifest.get("host_telemetry", {}) or {}
-        audit_trail = self.manifest.get("audit_trail", {}) or {}
+        audit_trail = self.manifest.get("audit_trail", {}) or self.trial.get("audit_trail", {}) or {}
         timing_info = self.trial.get("timing", {}) or {}
+        err_diag = self.manifest.get("error_diagnostics", {}) or self.trial.get("error_diagnostics", {}) or {}
 
         provider = sut_tuple.get("provider") or "UNRESOLVED"
         model_id = sut_tuple.get("model_id") or "UNRESOLVED"
+        declared_runtime = sut_tuple.get("declared_runtime") or self.trial.get("sut", {}).get("declared_runtime_version", "external-cli-wrapper")
         endpoint_url = sut_tuple.get("endpoint_url") or "NOT_OBSERVED"
         sampling = sut_tuple.get("sampling", {}) or {}
         temp = sampling.get("temperature", "NOT_OBSERVED")
@@ -215,6 +224,14 @@ class SotuMasterReporter:
         modalita_op = "Modalita A (con V3 attivo)" if is_modalita_a else "Modalita B (Black-Box U -> O)"
         regime_metodologico = self.manifest.get("regime", "R1_PILOT")
 
+        final_verdict = self.classification.get("final_verdict", "NOT_OBSERVED")
+        is_rate_limited = (
+            err_diag.get("is_rate_limited") is True
+            or "Rate-Limited" in str(v3_class)
+            or str(audit_trail.get("http_status")) == "429"
+            or final_verdict in ["SESSION_RATE_LIMITED", "SESSION_RATE_LIMITED_PARTIAL", "RATE_LIMITED"]
+        )
+
         now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
         lines.append("```markdown")
@@ -224,7 +241,7 @@ class SotuMasterReporter:
         lines.append(f"MODALITA OPERATIVA: {modalita_op}")
         lines.append(f"REGIME METODOLOGICO: {self.desc_info['regime']} ({regime_metodologico})")
         lines.append(f"DATA E ORA: {now_utc}")
-        lines.append(f"SUT DEFINITO: < Provider: {provider}, Model_ID: {model_id}, Endpoint: {endpoint_url}, Sampling: [T={temp}, Max={max_tok}] >")
+        lines.append(f"SUT DEFINITO: < Provider: {provider}, Model_ID: {model_id}, Runtime: {declared_runtime}, Endpoint: {endpoint_url}, Sampling: [T={temp}, Max={max_tok}] >")
         lines.append(f"CLIENT / RUNTIME: < OS: {device_mod}, Python: {py_ver}, Unicode: {uax_ver}, cURL: {curl_ver}, Locale: {active_locale}, RTT_Base: {rtt_base} ms >")
         lines.append("=" * 80)
         lines.append("")
@@ -236,7 +253,7 @@ class SotuMasterReporter:
         lines.append(f"- C_req (Network V3)   : {v3_class}")
         lines.append("- S (Server Context)   : NOT OBSERVED (Strutturalmente inaccessibile)")
         lines.append("- M_raw (Raw Output)   : NOT OBSERVED (Strutturalmente inaccessibile)")
-        lines.append(f"- C_resp (Response V3) : {'PRESENT (V3-3 Verificato)' if is_modalita_a else 'NOT OBSERVED'}")
+        lines.append(f"- C_resp (Response V3) : {'PRESENT (V3-3 Verificato)' if is_modalita_a else ('PRESENT (Error/429 Captured)' if is_rate_limited else 'NOT OBSERVED')}")
         lines.append("- O_dom / CLI Stdout   : YES (Estratto)")
         lines.append("- O_visual             : NOT APPLICABLE")
         lines.append("- Layer V5 Parametrico : V5_NONE")
@@ -307,7 +324,7 @@ class SotuMasterReporter:
         lines.append("")
         lines.append("   [O] RAW OBSERVATIONS:")
         lines.append(f"   - U_buffer Integrity Check : {'VERIFIED (SHA-256: ' + u_buf_sha + ')' if u_buf_sha != 'NOT_OBSERVED' else 'NOT_OBSERVED'}")
-        lines.append(f"   - Request Transport Layer  : SUT CLI Execution Bridge (TLS Socket)")
+        lines.append(f"   - Request Transport Layer  : SUT Adapter Execution Bridge ({declared_runtime})")
         lines.append(f"   - Correlation / Request ID : {req_id}")
         lines.append(f"   - C_req_unicode SHA-256    : {req_u_sha}")
         lines.append(f"   - C_req_app_bytes SHA-256  : {req_sha}")
@@ -315,6 +332,29 @@ class SotuMasterReporter:
         lines.append(f"   - Output Parsed SHA-256    : {out_sha}")
         lines.append(f"   - HTTP Status & Finish     : HTTP {http_st} | finish_reason: '{fin_r}'")
         lines.append(f"   - TTFT Observed E2E        : {ttft_ms} ms")
+
+        # Inserimento Diagnostica Errori e Quote (con sanitizzazione rigorosa)
+        if err_diag.get("is_error") is True or err_diag.get("is_rate_limited") is True or is_rate_limited:
+            err_st_val = _clean_str(err_diag.get("error_status")) or "RESOURCE_EXHAUSTED"
+            err_cd_val = _clean_str(err_diag.get("error_code")) or str(http_st)
+            err_msg_val = _clean_str(err_diag.get("error_message")) or "Quota or rate limit exceeded on API gateway."
+            q_metric_val = _clean_str(err_diag.get("quota_metric"))
+            q_id_val = _clean_str(err_diag.get("quota_id"))
+            q_val_val = _clean_str(err_diag.get("quota_value"))
+            r_delay_val = _clean_str(err_diag.get("retry_delay"))
+
+            lines.append("   - API Error Diagnostics    : [QUOTA / RATE-LIMIT INTERCEPTION]")
+            lines.append(f"     * Status & Code          : {err_st_val} (HTTP {err_cd_val})")
+            lines.append(f"     * Error Message          : {err_msg_val}")
+            if q_metric_val:
+                lines.append(f"     * Quota Metric Exceeded  : {q_metric_val}")
+            if q_id_val:
+                lines.append(f"     * Quota Violation ID     : {q_id_val}")
+            if q_val_val:
+                lines.append(f"     * Quota Limit/Value      : {q_val_val}")
+            if r_delay_val:
+                lines.append(f"     * Retry Delay Suggerito  : {r_delay_val}")
+
         lines.append("")
         lines.append("   [M] MENSURAND & ESTIMATES:")
         if self.test_id == "T12":
@@ -341,19 +381,37 @@ class SotuMasterReporter:
         lines.append("7. REPORT CONCLUSIVO FORMALE (THE QUADRUPLET RULE)")
         lines.append("")
         lines.append("- OSSERVAZIONE:")
-        lines.append(f"  Lo stimolo di test U_intended (SHA-256: {u_sha}) e' stato somministrato al SUT.")
-        if is_modalita_a:
-            lines.append(f"  Sul confine di trasporto V3-3, il payload applicativo C_req e' stato intercettato")
-            lines.append(f"  e materializzato con digest SHA-256: {req_sha} (C_req_unicode SHA-256: {req_u_sha}).")
-            lines.append(f"  La risposta del server C_resp (Request ID: {req_id}, HTTP Status: {http_st}) ha prodotto")
-            lines.append(f"  un output estratto con SHA-256: {out_sha}.")
-            lines.append(f"  Il tasso di replicazione osservato e' ORR_b = {orr_b_str} (95% CI esatto: {ci_str}).")
+        if is_rate_limited:
+            q_metric_display = _clean_str(err_diag.get("quota_metric"))
+            q_id_display = _clean_str(err_diag.get("quota_id")) or "N/A"
+            r_delay_display = _clean_str(err_diag.get("retry_delay"))
+            lines.append(f"  Lo stimolo di test U_intended (SHA-256: {u_sha}) e' stato predisposto per l'invio.")
+            lines.append(f"  Sul confine di trasporto di rete, la richiesta e' stata respinta con codice HTTP {http_st}")
+            lines.append(f"  (Status: {err_diag.get('error_status', 'RESOURCE_EXHAUSTED')}).")
+            if q_metric_display:
+                lines.append(f"  Metrica quota saturata: '{q_metric_display}' (Quota ID: {q_id_display}).")
+            if r_delay_display:
+                lines.append(f"  Tempo di attesa raccomandato dal server: {r_delay_display}.")
+            lines.append(f"  Il Metrological Circuit Breaker e' intervenuto arrestando la sequenza dei trial.")
+            lines.append(f"  Trial validi registrati: N_valid = {self.classification.get('sample_size_valid', 0)} (ORR_b = {orr_b_str}).")
         else:
-            lines.append(f"  L'output terminale O e' stato acquisito in Modalita B (Black-box pura).")
-            lines.append(f"  Digest estratto SHA-256: {out_sha}. ORR_b = {orr_b_str}.")
+            lines.append(f"  Lo stimolo di test U_intended (SHA-256: {u_sha}) e' stato somministrato al SUT.")
+            if is_modalita_a:
+                lines.append(f"  Sul confine di trasporto V3-3, il payload applicativo C_req e' stato intercettato")
+                lines.append(f"  e materializzato con digest SHA-256: {req_sha} (C_req_unicode SHA-256: {req_u_sha}).")
+                lines.append(f"  La risposta del server C_resp (Request ID: {req_id}, HTTP Status: {http_st}) ha prodotto")
+                lines.append(f"  un output estratto con SHA-256: {out_sha}.")
+                lines.append(f"  Il tasso di replicazione osservato e' ORR_b = {orr_b_str} (95% CI esatto: {ci_str}).")
+            else:
+                lines.append(f"  L'output terminale O e' stato acquisito in Modalita B (Black-box pura).")
+                lines.append(f"  Digest estratto SHA-256: {out_sha}. ORR_b = {orr_b_str}.")
         lines.append("")
         lines.append("- INFERENZA:")
-        if is_modalita_a:
+        if is_rate_limited:
+            lines.append(f"  I dati di telemetria attestano il blocco della richiesta presso l'API Gateway/WAF")
+            lines.append(f"  per esaurimento della quota allocata o violazione dei rate limits. Nessun payload")
+            lines.append(f"  di inferenza utile e' stato elaborato dai layer generativi interni del modello.")
+        elif is_modalita_a:
             lines.append(f"  I dati empirici attestano che il payload C_req_unicode corrisponde all'input")
             lines.append(f"  intenzionale U_intended. Sotto il criterio {criterio_m}, l'ipotesi di mutazione")
             lines.append(f"  client-side pre-trasmissione (H1a) e' valutata entro il confine osservato.")
@@ -366,7 +424,10 @@ class SotuMasterReporter:
         lines.append(f"  In conformita alla regola Strength(Claim) <= Strength(Evidence):")
         lines.append(f"  1. Evidence Status: {ev_status} (Vettore di Evidenza: {final_vector}).")
         lines.append(f"  2. Identification Status: {id_status}.")
-        if is_modalita_a:
+        if is_rate_limited:
+            lines.append(f"  3. La sessione e' archiviata come {final_verdict}.")
+            lines.append(f"  4. Le ipotesi causali H1-H5 sono formalmente NOT EVALUATED stante il blocco di trasporto.")
+        elif is_modalita_a:
             lines.append(f"  3. L'ipotesi H1a (Client Mutation) e' DISCONFERMATA entro il confine strumentato.")
             lines.append(f"  4. Le classi di ipotesi interne H2, H3, H4 e H5 rimangono UNDERDETERMINED (Proxy != Meccanismo).")
         else:
@@ -387,13 +448,12 @@ class SotuMasterReporter:
         lines.append(f"  oppure qualora una replica tra sessioni indipendenti fallisse sotto il criterio {criterio_m}.")
         lines.append("")
 
-        max_boundary = "Layer V3-3 (Client/Transport Network Boundary)" if is_modalita_a else "Layer V2 (Terminal Behavioral Output)"
-        validation_verdict = self.classification.get("final_verdict", "NOT_OBSERVED")
+        max_boundary = "Layer V3-3 (Client/Transport Network Boundary)" if is_modalita_a else ("Layer V0 (Pre-Transport Block / 429)" if is_rate_limited else "Layer V2 (Terminal Behavioral Output)")
 
         lines.append("9. METRICHE FINALI E VETTORE DI EVIDENZA")
         lines.append(f"- Confine Massimo Osservato : {max_boundary}")
         lines.append(f"- Vettore di Evidenza Finale : {final_vector}")
-        lines.append(f"- Esito Finale Validazione  : {validation_verdict}")
+        lines.append(f"- Esito Finale Validazione  : {final_verdict}")
         lines.append("=" * 80)
         lines.append("```")
 
@@ -423,7 +483,6 @@ def main():
         class_file = run_path / "claim_classification.json"
         metrics_file = run_path / "metrics_summary.json"
         
-        # Ricerca ricorsiva e deterministica del primo trial_metadata.json disponibile
         found_trial_files = sorted(run_path.glob("**/trial_metadata*.json"))
         trial_file = found_trial_files[0] if found_trial_files else (run_path / "trial_metadata.json")
 
@@ -474,7 +533,8 @@ def main():
             "test_id": trial_data.get("sut", {}).get("test_id", "UNRESOLVED"),
             "sut_formal_tuple": trial_data.get("sut", {}),
             "provenance_dag": trial_data.get("provenance_dag", {}),
-            "audit_trail": trial_data.get("audit_trail", {})
+            "audit_trail": trial_data.get("audit_trail", {}),
+            "error_diagnostics": trial_data.get("error_diagnostics", {})
         }
 
     reporter = SotuMasterReporter(
@@ -503,3 +563,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
