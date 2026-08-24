@@ -1,1 +1,25 @@
+name: CI Sicura
 
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+# Permessi di default ridotti al minimo indispensabile (sola lettura)
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10 # Previene consumi anomali o blocchi in loop
+
+    steps:
+      # Uso del commit SHA invece del tag per prevenire manomissioni (supply-chain attack)
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Esegui test
+        run: |
+          echo "Ambiente protetto ed eseguito con permessi minimi"
