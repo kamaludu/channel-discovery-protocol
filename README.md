@@ -8,7 +8,7 @@
 |  Architettura Software   : Harness Standalone POSIX Bash 4.0+ & Python 3.10+ |
 |  Dipendenze Esterne      : ZERO-PIP (Esclusivamente Python Standard Library) |
 |  Target Environment      : Android/Termux (aarch64) | Linux POSIX            |
-|  Regime di Licenza       : GNU GPLv3 (Harness) | CC BY-SA 4.0 (Specifiche)   |
+|  Regime di Licenza       : GNU GPLv3 o superiore 
 +==============================================================================+
 ```
 
