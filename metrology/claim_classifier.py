@@ -5,7 +5,7 @@
 # CDP Decision Engine — Deterministic Decision DAG & Differential Claim Classifier
 # File: metrology/claim_classifier.py
 # Component: Epistemic Decision Engine (Ruling H1-H5)
-# Standard: CDP v2.3 (Sez. 0, 2, 4, 6, 10) & SOP v2.3 (Sez. 2.2, 2.3, 4.1, 7)
+# Standard: CDP v2.3 (Sez. 0, 2, 4, 6, 10) & SOP v2.3 (Sez. 2.2, 2.3, 4.1, 6, 7)
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
@@ -22,6 +22,7 @@
 # Riceve in input gli artefatti metrologici formalizzati generati dall'adapter
 # (trial_metadata.json) e dal motore statistico (metrics_summary.json):
 #   - Valuta i confini di osservabilita' raggiunti (O0..O3).
+#   - Gestisce formalmente lo stato di RATE_LIMITED / RESOURCE_EXHAUSTED.
 #   - Genera il Vettore Formale di Evidenza: E = < O_x, C_x, R_x, S_x >.
 #   - Applica il principio epistemico "Strength(Claim) <= Strength(Evidence)"
 #     e "Proxy != Meccanismo" (H2-H5 UNDERDETERMINED su black-box API).
@@ -54,15 +55,19 @@ class ClaimClassifier:
         regime: str = "R1_PILOT"
     ) -> Dict[str, Any]:
         """
-        Valuta un singolo trial sperimentale sulla base del DAG di provenienza e dei predicati V3.
+        Valuta un singolo trial sperimentale sulla base del DAG di provenienza, dei predicati V3
+        e della diagnostica di errore/quota.
         """
         eval_block = trial_metadata.get("evaluation", {})
         audit_block = trial_metadata.get("audit_trail", {})
         dag_block = trial_metadata.get("provenance_dag", {})
+        err_diag = trial_metadata.get("error_diagnostics", {})
 
         trial_class = eval_block.get("trial_classification", "FAILED_TRIAL")
         output_provenance = eval_block.get("output_provenance", "UNKNOWN")
         v3_class = audit_block.get("v3_classification", "V3-0a (No-Capture)")
+        http_status = audit_block.get("http_status")
+        http_status_str = str(http_status) if http_status is not None else ""
 
         u_sha = dag_block.get("stimulus_intended_sha256")
         req_u_sha = dag_block.get("c_req_unicode_sha256")
@@ -70,7 +75,34 @@ class ClaimClassifier:
 
         r_scope = "R1" if "R1" in regime else ("R2" if "R2" in regime else "R0")
 
-        # CASO 1: TRIAL INVALIDO O FALLITO
+        # CASO 1: TRIAL BLOCCATO DA RATE LIMIT / QUOTA ESAURITA (HTTP 429 / RESOURCE_EXHAUSTED)
+        if (
+            trial_class == "RATE_LIMITED_TRIAL"
+            or err_diag.get("is_rate_limited") is True
+            or http_status_str == "429"
+            or "Rate-Limited" in str(v3_class)
+        ):
+            return {
+                "verdict_status": "RATE_LIMITED",
+                "evidence_status": "NOT SUPPORTED (Rate Limited / Quota Exhausted)",
+                "identification_status": "NOT IDENTIFIED",
+                "observed_boundary": "O0",
+                "evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
+                "hypotheses_evaluation": {
+                    "H1_client": "NOT APPLICABLE",
+                    "H2_server_pre_context": "NOT EVALUATED (Request rejected by API Gateway / Quota 429)",
+                    "H3_tokenizer": "NOT EVALUATED",
+                    "H4_model_core": "NOT EVALUATED",
+                    "H5_post_render": "NOT EVALUATED"
+                },
+                "epistemic_notes": (
+                    "Trial respinto dal server per superamento quote o rate limit (HTTP 429 / RESOURCE_EXHAUSTED). "
+                    "Nessun dato di canale utile per inferenza comportamentale o meccanicistica."
+                ),
+                "error_diagnostics": err_diag
+            }
+
+        # CASO 2: TRIAL INVALIDO O FALLITO
         if trial_class in ["INVALID_STIMULUS", "INVALID_ENVIRONMENT", "FAILED_TRIAL"]:
             return {
                 "verdict_status": "INVALID",
@@ -88,7 +120,7 @@ class ClaimClassifier:
                 "epistemic_notes": "Trial non valido a causa di anomalie ambientali, di stimolo o fallimento SUT."
             }
 
-        # CASO 2: MODALITÀ B (Black-Box Pura / V3 Non Catturato)
+        # CASO 3: MODALITÀ B (Black-Box Pura / V3 Non Catturato)
         if "V3-3" not in v3_class:
             if output_provenance in ["VERIFIED", "ATTRIBUTED"] and out_sha is not None:
                 is_match = (u_sha == out_sha)
@@ -122,12 +154,12 @@ class ClaimClassifier:
                     "epistemic_notes": "Output orfano o non associabile univocamente alla sessione di prova."
                 }
 
-        # CASO 3: MODALITÀ A (Layer V3-3 Verificato sul Confine Applicativo)
+        # CASO 4: MODALITÀ A (Layer V3-3 Verificato sul Confine Applicativo)
         effective_req_sha = req_u_sha if req_u_sha else dag_block.get("c_req_app_bytes_sha256")
         diff_u_req = (u_sha != effective_req_sha) if (u_sha and effective_req_sha) else False
         diff_req_out = (effective_req_sha != out_sha) if (effective_req_sha and out_sha) else True
 
-        # Sottocaso 3A: Mutazione Pre-Trasporto (U != C_req_unicode)
+        # Sottocaso 4A: Mutazione Pre-Trasporto (U != C_req_unicode)
         if diff_u_req:
             return {
                 "verdict_status": "LOCAL_PRE_TRANSPORT_MUTATION",
@@ -145,7 +177,7 @@ class ClaimClassifier:
                 "epistemic_notes": "Mutazione localizzata nel software client prima della trasmissione in rete (H1a SUPPORTED)."
             }
 
-        # Sottocaso 3B: Trasmissione Integra su C_req (U == C_req_unicode)
+        # Sottocaso 4B: Trasmissione Integra su C_req (U == C_req_unicode)
         if not diff_u_req:
             if not diff_req_out:
                 return {
@@ -216,8 +248,39 @@ class ClaimClassifier:
                 "conclusion_summary": "Nessun trial registrato per la sessione."
             }
 
-        n_valid_trials = sum(1 for t in trials_evaluations if t.get("verdict_status") not in ["INVALID", "OUTPUT_OBSERVED_UNATTRIBUTED"])
+        n_rate_limited = sum(1 for t in trials_evaluations if t.get("verdict_status") == "RATE_LIMITED")
+        n_valid_trials = sum(1 for t in trials_evaluations if t.get("verdict_status") not in ["INVALID", "OUTPUT_OBSERVED_UNATTRIBUTED", "RATE_LIMITED"])
         n_pre_client_mut = sum(1 for t in trials_evaluations if t.get("verdict_status") == "LOCAL_PRE_TRANSPORT_MUTATION")
+
+        session_err_diag = {}
+        for t in trials_evaluations:
+            ed = t.get("error_diagnostics", {})
+            if ed.get("is_error") or ed.get("is_rate_limited"):
+                session_err_diag = ed
+                break
+
+        # CASO SPECIALE 1: SESSIONE TOTALMENTE BLOCCATA DA CIRCUIT BREAKER / RATE LIMIT
+        if n_rate_limited > 0 and n_valid_trials == 0:
+            return {
+                "test_id": test_id,
+                "session_regime": regime,
+                "comparison_criterion": comparison_criterion,
+                "sample_size_valid": 0,
+                "point_estimate_ORR_b": None,
+                "final_verdict": "SESSION_RATE_LIMITED",
+                "final_evidence_status": "NOT SUPPORTED (Quota Exhausted / 429)",
+                "final_identification_status": "NOT IDENTIFIED",
+                "final_evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
+                "error_diagnostics": session_err_diag,
+                "hypotheses_ruling": {
+                    "H1a_client_mutation": "NOT APPLICABLE",
+                    "H2_to_H5_internal": "NOT EVALUATED (Circuit Breaker Tripped: Quota Exhausted)"
+                },
+                "conclusion_summary": (
+                    "Sessione interrotta dal Metrological Circuit Breaker: superamento quote o rate limit API "
+                    "(HTTP 429 / RESOURCE_EXHAUSTED). Nessun trial valido registrato."
+                )
+            }
 
         # T12: TEST APPAIATO TTFT (Grandezza Continua M4)
         if test_id == "T12" and stats_summary:
@@ -252,6 +315,7 @@ class ClaimClassifier:
                 "final_evidence_status": final_ev_status,
                 "final_identification_status": final_id_status,
                 "final_evidence_vector": final_vector,
+                "error_diagnostics": session_err_diag,
                 "hypotheses_ruling": {
                     "H1_client": "NOT APPLICABLE",
                     "H2_server_gateway": "COMPATIBLE",
@@ -276,16 +340,40 @@ class ClaimClassifier:
                 "final_evidence_status": "NOT SUPPORTED",
                 "final_identification_status": "NOT IDENTIFIED",
                 "final_evidence_vector": cls.format_evidence_vector("O0", "C0", r_scope, "S0"),
+                "error_diagnostics": session_err_diag,
                 "conclusion_summary": "Tutti i trial della sessione sono risultati invalidi o non attribuibili."
             }
 
         # Determinazione del tasso di conformità ORR_b
         orr_b: float = 0.0
-        if stats_summary and "point_estimate_ORR_b" in stats_summary:
+        if stats_summary and "point_estimate_ORR_b" in stats_summary and stats_summary["point_estimate_ORR_b"] is not None:
             orr_b = float(stats_summary["point_estimate_ORR_b"])
         else:
             n_conformant_raw = sum(1 for t in trials_evaluations if t.get("verdict_status") in ["CONFORMANT_REPRODUCTION", "VALID_BEHAVIORAL_ONLY"] and t.get("evidence_status") == "SUPPORTED")
             orr_b = round(n_conformant_raw / float(max(1, n_valid)), 4)
+
+        # CASO SPECIALE 2: SESSIONE TRONCATA DA CIRCUIT BREAKER CON ALCUNI TRIAL VALIDI
+        if n_rate_limited > 0 and n_valid > 0:
+            return {
+                "test_id": test_id,
+                "session_regime": regime,
+                "comparison_criterion": comparison_criterion,
+                "sample_size_valid": n_valid,
+                "point_estimate_ORR_b": orr_b,
+                "final_verdict": "SESSION_RATE_LIMITED_PARTIAL",
+                "final_evidence_status": "SUPPORTED (Partial / Circuit Breaker Interrupted)",
+                "final_identification_status": "UNDERDETERMINED",
+                "final_evidence_vector": cls.format_evidence_vector("O3" if n_pre_client_mut == 0 else "O0", "C1", r_scope, "S1"),
+                "error_diagnostics": session_err_diag,
+                "hypotheses_ruling": {
+                    "H1a_client_mutation": "NOT EVALUATED (Incomplete sample)",
+                    "H2_to_H5_internal": "NOT EVALUATED (Circuit Breaker Tripped: Quota Exhausted)"
+                },
+                "conclusion_summary": (
+                    f"Sessione parziale: {n_valid} trial validi completati prima dell'intervento del Circuit Breaker "
+                    f"(HTTP 429 / RESOURCE_EXHAUSTED). Stima ORR_b = {orr_b} vincolata al solo campione parziale."
+                )
+            }
 
         if n_pre_client_mut > 0 and n_pre_client_mut == n_valid:
             return {
@@ -298,6 +386,7 @@ class ClaimClassifier:
                 "final_evidence_status": "SUPPORTED",
                 "final_identification_status": "IDENTIFIED_WITHIN_OBSERVED_BOUNDARY",
                 "final_evidence_vector": cls.format_evidence_vector("O3", "C1", r_scope, "S3"),
+                "error_diagnostics": session_err_diag,
                 "hypotheses_ruling": {
                     "H1a_client_mutation": "SUPPORTED / IDENTIFIED_DIRECT",
                     "H2_to_H5_internal": "NOT APPLICABLE"
@@ -316,6 +405,7 @@ class ClaimClassifier:
                 "final_evidence_status": "SUPPORTED",
                 "final_identification_status": "IDENTIFIED_WITHIN_OBSERVED_BOUNDARY",
                 "final_evidence_vector": cls.format_evidence_vector("O3", "C1", r_scope, "S1"),
+                "error_diagnostics": session_err_diag,
                 "hypotheses_ruling": {
                     "H1a_client_mutation": "DISCONFIRMED (within observed boundary)",
                     "H2_to_H5_internal": "UNDERDETERMINED (Proxy != Meccanismo)"
@@ -337,6 +427,7 @@ class ClaimClassifier:
                 "final_evidence_status": "SUPPORTED (Divergence Observed)",
                 "final_identification_status": "UNDERDETERMINED",
                 "final_evidence_vector": cls.format_evidence_vector("O3", "C1", r_scope, "S5"),
+                "error_diagnostics": session_err_diag,
                 "hypotheses_ruling": {
                     "H1a_client_mutation": "DISCONFIRMED (C_req integro)",
                     "H2_to_H5_internal": "UNDERDETERMINED"
@@ -354,6 +445,7 @@ class ClaimClassifier:
             "final_evidence_status": "SUPPORTED (Non-Deterministic Behavior)",
             "final_identification_status": "UNDERDETERMINED",
             "final_evidence_vector": cls.format_evidence_vector("O3", "C1", r_scope, "S1"),
+            "error_diagnostics": session_err_diag,
             "hypotheses_ruling": {
                 "H1a_client_mutation": "DISCONFIRMED",
                 "H2_to_H5_internal": "UNDERDETERMINED (Sampling T > 0 o routing distribuito)"
@@ -430,3 +522,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
