@@ -4,7 +4,7 @@
 # CDP/SOP v2.3 METROLOGY HARNESS
 # File: core/sut_adapter.sh
 # Component: Wrapper SUT & Adapter Runtime per Invocazione e Introspezione
-# Standard: CDP v2.3 (Sez. 1, 4, 5) & SOP v2.3 (Sez. 1.3, 2.2, 3.1, 4.1)
+# Standard: CDP v2.3 (Sez. 1, 4, 5) & SOP v2.3 (Sez. 1.3, 2.2, 3.1, 4.1) & CDP-SAC v1.0
 # Copyright (C) 2026 Cristian Evangelisti
 # License: GPL-3.0-or-later
 # Repository: https://github.com/kamaludu/channel-discovery-protocol/
@@ -13,20 +13,16 @@
 # Requirements: bash (>=4.0), coreutils, util-linux, curl, jq, openssl, python (>=3.10 stdlib)
 #
 # ==============================================================================
-# GUIDA ARCHITETTURALE PER SVILUPPATORI / ADAPTER PLUGGABILITY:
+# GUIDA ARCHITETTURALE PER SVILUPPATORI / ADAPTER PLUGGABILITY (CDP-SAC v1.0):
 # ==============================================================================
 # Questo script incapsula il confine di esecuzione del System Under Test (SUT).
-# Attualmente implementa l'interfaccia verso la CLI esterna 'bash4llm'.
-# Per sostituire 'bash4llm' con un altro strumento (es. cURL nativo, libreria Python,
-# SDK proprietario o proxy locale):
-#   1. Modificare la Sezione 3 (SUT Invocator Command Assembly & Execution).
-#   2. Mappare la Sezione 4 (Artifact Harvesting) per raccogliere:
-#      - C_req_app.bin : Payload grezzo inviato sulla rete (JSON/HTTP body).
-#      - C_resp_app.json : Risposta raw ricevuta dal server.
-#      - cURL.log : Traccia di trasporto/TLS ed header HTTP.
-#      - O_parsed.txt : Testo puro estratto dalla risposta.
-#   3. Tutte le sezioni metrologiche (DAG di provenienza SHA-256, predicati V3,
-#      calcolo TTFT ed emissione di trial_metadata.json) rimangono invariate.
+# Implementa l'interfaccia verso la CLI esterna 'bash4llm'.
+# Raccoglie in modo deterministico e senza valori cablati:
+#   - C_req_app.bin     : Payload grezzo inviato sulla rete (JSON/HTTP body).
+#   - C_resp_app.json   : Risposta raw ricevuta dal server.
+#   - cURL.log          : Traccia di trasporto/TLS ed header HTTP.
+#   - O_parsed.txt      : Testo puro estratto dalla risposta.
+#   - trial_metadata.json : Metadati di prova, DAG SHA-256 ed error_diagnostics.
 # ==============================================================================
 
 set -euo pipefail
@@ -84,7 +80,7 @@ Opzioni Obbligatorie:
   --bash4llm-bin <PATH>   Percorso dell'eseguibile SUT (bash4llm).
   --artifact-dir <DIR>    Directory di destinazione per la raccolta degli artefatti grezzi.
 
-Configurazione SUT (Se omesse, delegate alla configurazione attiva del SUT):
+Configurazione SUT (Se omesse, delegate all'introspezione attiva del SUT):
   --provider <NAME>       Nome del provider target (es. groq, gemini, mistral, openrouter).
   --model <MODEL_ID>      Identificativo del modello per l'invocazione.
   --temperature <FLOAT>   Parametro di campionamento temperatura.
@@ -429,7 +425,13 @@ if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; 
   fi
 fi
 
-# Introspezione reale dei metadati di risposta e status di rete (Nessun valore inventato)
+# Introspezione reale dei metadati SUT (Runtime Version, Provider, Model ID)
+DECLARED_RUNTIME_VERSION="NOT_OBSERVED"
+if [ -n "$BASH4LLM_BIN" ]; then
+  DECLARED_RUNTIME_VERSION="$(bash "$BASH4LLM_BIN" --version 2>/dev/null | head -n 1 | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' || echo "NOT_OBSERVED")"
+  [ -z "$DECLARED_RUNTIME_VERSION" ] && DECLARED_RUNTIME_VERSION="NOT_OBSERVED"
+fi
+
 REQ_ID_EXTRACTED="NOT_OBSERVED"
 FINISH_REASON_EXTRACTED="NOT_OBSERVED"
 HTTP_STATUS_EXTRACTED="null"
@@ -447,8 +449,9 @@ else
     fi
   fi
 fi
+[ -z "$ACTUAL_OBSERVED_PROVIDER" ] && ACTUAL_OBSERVED_PROVIDER="UNRESOLVED"
 
-# 2. Rilevamento Metadati dal Payload di Risposta
+# 2. Rilevamento Model ID Effettivo (Payload > CLI Flag > Config File)
 if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
   REQ_ID_EXTRACTED="$(jq -r '.id // .x_groq?.id // .header?.["x-request-id"] // "NOT_OBSERVED"' "$HARVEST_RESP_FILE" 2>/dev/null || echo "NOT_OBSERVED")"
   FINISH_REASON_EXTRACTED="$(jq -r '.choices[0]?.finish_reason // .candidates[0]?.finishReason // "NOT_OBSERVED"' "$HARVEST_RESP_FILE" 2>/dev/null || echo "NOT_OBSERVED")"
@@ -456,12 +459,20 @@ if [ -s "$HARVEST_RESP_FILE" ] && jq -e . "$HARVEST_RESP_FILE" >/dev/null 2>&1; 
   RESP_MODEL="$(jq -r '.model // empty' "$HARVEST_RESP_FILE" 2>/dev/null || true)"
   if [ -n "$RESP_MODEL" ]; then
     ACTUAL_OBSERVED_MODEL="$RESP_MODEL"
-  elif [ -n "$MODEL_ID" ]; then
-    ACTUAL_OBSERVED_MODEL="$MODEL_ID"
   fi
-elif [ -n "$MODEL_ID" ]; then
-  ACTUAL_OBSERVED_MODEL="$MODEL_ID"
 fi
+
+if [ "$ACTUAL_OBSERVED_MODEL" = "UNRESOLVED" ]; then
+  if [ -n "$MODEL_ID" ]; then
+    ACTUAL_OBSERVED_MODEL="$MODEL_ID"
+  elif [ -n "$BASH4LLM_BIN" ] && [ "$ACTUAL_OBSERVED_PROVIDER" != "UNRESOLVED" ]; then
+    ACTIVE_MODEL_FILE="$(bash "$BASH4LLM_BIN" --print-model-file "$ACTUAL_OBSERVED_PROVIDER" 2>/dev/null || true)"
+    if [ -n "$ACTIVE_MODEL_FILE" ] && [ -f "$ACTIVE_MODEL_FILE" ]; then
+      ACTUAL_OBSERVED_MODEL="$(cat "$ACTIVE_MODEL_FILE" 2>/dev/null | tr -d ' \n\r' || echo "UNRESOLVED")"
+    fi
+  fi
+fi
+[ -z "$ACTUAL_OBSERVED_MODEL" ] && ACTUAL_OBSERVED_MODEL="UNRESOLVED"
 
 # 3. Estrazione reale dell'HTTP Status Code dai log di trasporto cURL o da JSON error
 HTTP_CODE_CURL="$(grep -E -o '< HTTP/[123.]+ [0-9]{3}|HTTP/[123.]+ [0-9]{3}' "$HARVEST_CURL_LOG" 2>/dev/null | tail -n 1 | awk '{print $NF}' || true)"
@@ -475,7 +486,58 @@ elif [ -s "$HARVEST_RESP_FILE" ] && jq -e '.error.code' "$HARVEST_RESP_FILE" >/d
 fi
 
 # ==============================================================================
-# SEZIONE 6: PREDICATI METROLOGICI & CLASSIFICAZIONE OSSERVABILITA V3
+# SEZIONE 6: ESTRAZIONE DIAGNOSTICA ERRORI & QUOTE (error_diagnostics)
+# ==============================================================================
+ERR_IS_ERROR=false
+ERR_IS_RATE_LIMITED=false
+ERR_CODE="null"
+ERR_STATUS="null"
+ERR_MESSAGE="null"
+ERR_QUOTA_METRIC="null"
+ERR_QUOTA_ID="null"
+ERR_QUOTA_VALUE="null"
+ERR_RETRY_DELAY="null"
+
+if [ -s "$HARVEST_RESP_FILE" ] && jq -e 'has("error")' "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
+  ERR_IS_ERROR=true
+  
+  ERR_CODE="$(jq -r '.error.code // empty' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+  ERR_STATUS="$(jq -r '.error.status // empty' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+  ERR_MESSAGE="$(jq -r '.error.message // empty' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+  
+  ERR_QUOTA_METRIC="$(jq -r '
+    ([.error.details[]? | select(.["@type"]=="type.googleapis.com/google.rpc.QuotaFailure" or has("violations")) | .violations[]?.quotaMetric // empty] | first) // empty
+  ' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+
+  ERR_QUOTA_ID="$(jq -r '
+    ([.error.details[]? | select(.["@type"]=="type.googleapis.com/google.rpc.QuotaFailure" or has("violations")) | .violations[]?.quotaId // empty] | first) // empty
+  ' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+
+  ERR_QUOTA_VALUE="$(jq -r '
+    ([.error.details[]? | select(.["@type"]=="type.googleapis.com/google.rpc.QuotaFailure" or has("violations")) | .violations[]?.quotaValue // empty] | first) // empty
+  ' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+
+  ERR_RETRY_DELAY="$(jq -r '
+    ([.error.details[]? | select(.["@type"]=="type.googleapis.com/google.rpc.RetryInfo" or has("retryDelay")) | .retryDelay // empty] | first) // empty
+  ' "$HARVEST_RESP_FILE" 2>/dev/null || echo "")"
+
+  [ -z "$ERR_CODE" ] && ERR_CODE="null"
+  [ -z "$ERR_STATUS" ] && ERR_STATUS="null"
+  [ -z "$ERR_MESSAGE" ] && ERR_MESSAGE="null"
+  [ -z "$ERR_QUOTA_METRIC" ] && ERR_QUOTA_METRIC="null"
+  [ -z "$ERR_QUOTA_ID" ] && ERR_QUOTA_ID="null"
+  [ -z "$ERR_QUOTA_VALUE" ] && ERR_QUOTA_VALUE="null"
+  [ -z "$ERR_RETRY_DELAY" ] && ERR_RETRY_DELAY="null"
+fi
+
+# Controllo rate-limiting da status HTTP o payload o log
+if [ "$HTTP_STATUS_EXTRACTED" = "429" ] || [ "$ERR_CODE" = "429" ] || [ "$ERR_STATUS" = "RESOURCE_EXHAUSTED" ] || grep -qi "RESOURCE_EXHAUSTED\|Rate limit\|429" "$HARVEST_CURL_LOG" 2>/dev/null; then
+  ERR_IS_RATE_LIMITED=true
+  ERR_IS_ERROR=true
+fi
+
+# ==============================================================================
+# SEZIONE 7: PREDICATI METROLOGICI & CLASSIFICAZIONE OSSERVABILITA V3
 # ==============================================================================
 P_APP_REQUEST_OBSERVED=false
 P_FINGERPRINT_MATCH=false
@@ -496,14 +558,8 @@ if [ "$P_APP_REQUEST_OBSERVED" = "true" ]; then
   fi
 fi
 
-# Rilevamento univoco di errori nel payload JSON o negli status HTTP
-HAS_JSON_ERROR=false
-if [ -s "$HARVEST_RESP_FILE" ] && jq -e 'has("error")' "$HARVEST_RESP_FILE" >/dev/null 2>&1; then
-  HAS_JSON_ERROR=true
-fi
-
 # Correlazione di risposta formale: payload presente, status 2xx, exit code 0 e nessun oggetto error
-if [ -s "$HARVEST_RESP_FILE" ] && [ "$B4L_EXIT_CODE" -eq 0 ] && [ "$HAS_JSON_ERROR" = "false" ]; then
+if [ -s "$HARVEST_RESP_FILE" ] && [ "$B4L_EXIT_CODE" -eq 0 ] && [ "$ERR_IS_ERROR" = "false" ]; then
   if [ "$HTTP_STATUS_EXTRACTED" = "null" ] || [[ "$HTTP_STATUS_EXTRACTED" =~ ^2[0-9]{2}$ ]]; then
     P_RESPONSE_CORRELATION=true
   fi
@@ -511,46 +567,48 @@ fi
 
 V3_CLASSIFICATION="V3-0a (No-Capture)"
 V3_MOTIVATION="Nessun traffico applicativo catturato sul confine di invocazione."
+OUTPUT_PROVENANCE="UNKNOWN"
+TRIAL_CLASSIFICATION="FAILED_TRIAL"
+ADAPTER_FINAL_EXIT_CODE="$B4L_EXIT_CODE"
 
-if [ "$HTTP_STATUS_EXTRACTED" = "429" ] || grep -qi "RESOURCE_EXHAUSTED\|Rate limit\|429" "$HARVEST_CURL_LOG" 2>/dev/null; then
+if [ "$ERR_IS_RATE_LIMITED" = "true" ]; then
   V3_CLASSIFICATION="V3-1 (Rate-Limited / 429)"
-  V3_MOTIVATION="Richiesta respinta dal server per superamento quote o rate limit (HTTP 429)."
-elif [ "$HAS_JSON_ERROR" = "true" ] || [ "$B4L_EXIT_CODE" -ne 0 ] || [[ "$HTTP_STATUS_EXTRACTED" =~ ^[45][0-9]{2}$ ]]; then
+  V3_MOTIVATION="Richiesta respinta dal server per superamento quote o rate limit (HTTP 429 / RESOURCE_EXHAUSTED)."
+  OUTPUT_PROVENANCE="UNKNOWN"
+  TRIAL_CLASSIFICATION="RATE_LIMITED_TRIAL"
+  ADAPTER_FINAL_EXIT_CODE=16
+elif [ "$ERR_IS_ERROR" = "true" ] || [ "$B4L_EXIT_CODE" -ne 0 ] || [[ "$HTTP_STATUS_EXTRACTED" =~ ^[45][0-9]{2}$ ]]; then
   V3_CLASSIFICATION="V3-1 (API Error / Non-2xx Response)"
   V3_MOTIVATION="Risposta del server con errore HTTP ${HTTP_STATUS_EXTRACTED:-<non_rilevato>} o payload JSON di errore."
+  OUTPUT_PROVENANCE="UNKNOWN"
+  TRIAL_CLASSIFICATION="FAILED_TRIAL"
+  [ "$ADAPTER_FINAL_EXIT_CODE" -eq 0 ] && ADAPTER_FINAL_EXIT_CODE=1
 elif [ "$P_APP_REQUEST_OBSERVED" = "true" ] && [ "$P_FINGERPRINT_MATCH" = "true" ] && [ "$P_RESPONSE_CORRELATION" = "true" ] && [ "$P_HARNESS_ISOLATION" = "true" ]; then
   V3_CLASSIFICATION="V3-3 (App-Layer Verified)"
   V3_MOTIVATION="Payload C_req_app materializzato, C_req_unicode verificato e correlazione risposta confermata."
-elif [ "$P_APP_REQUEST_OBSERVED" = "true" ]; then
+  OUTPUT_PROVENANCE="VERIFIED"
+  TRIAL_CLASSIFICATION="VALID_TRIAL"
+elif [ "$B4L_EXIT_CODE" -eq 0 ] && [ -n "$PARSED_OUTPUT_TEXT" ]; then
   V3_CLASSIFICATION="V3-1 (Traffic Detected / Partial Match)"
-  V3_MOTIVATION="Payload di richiesta presente ma correlazione di risposta parziale o exit code non nullo."
+  V3_MOTIVATION="Output terminale acquisito ma correlazione V3 parziale o asincrona."
+  OUTPUT_PROVENANCE="ATTRIBUTED"
+  TRIAL_CLASSIFICATION="BEHAVIORAL_ONLY_TRIAL"
 elif [ "$DRY_RUN_MODE" -eq 1 ]; then
   V3_CLASSIFICATION="V3-0b (Dry-Run Simulation)"
   V3_MOTIVATION="Modalita dry-run attiva; invocazione simulata senza rete."
-fi
-
-OUTPUT_PROVENANCE="UNKNOWN"
-TRIAL_CLASSIFICATION="FAILED_TRIAL"
-
-if [ "$V3_CLASSIFICATION" = "V3-3 (App-Layer Verified)" ] && [ -n "$PARSED_OUTPUT_TEXT" ]; then
-  OUTPUT_PROVENANCE="VERIFIED"
-  TRIAL_CLASSIFICATION="VALID_TRIAL"
-elif [ "$B4L_EXIT_CODE" -eq 0 ] && [ "$HAS_JSON_ERROR" = "false" ] && [ -n "$PARSED_OUTPUT_TEXT" ]; then
-  OUTPUT_PROVENANCE="ATTRIBUTED"
-  TRIAL_CLASSIFICATION="BEHAVIORAL_ONLY_TRIAL"
-else
   OUTPUT_PROVENANCE="UNKNOWN"
-  TRIAL_CLASSIFICATION="FAILED_TRIAL"
+  TRIAL_CLASSIFICATION="VALID_TRIAL"
 fi
 
 # ==============================================================================
-# SEZIONE 7: EMISSIONE METADATI DEL TRIAL (trial_metadata.json)
+# SEZIONE 8: EMISSIONE METADATI DEL TRIAL (trial_metadata.json)
 # ==============================================================================
 TRIAL_METADATA_FILE="$ARTIFACT_DIR/trial_metadata.json"
 
 TRIAL_JSON="$(jq -c -n \
   --arg prov "$ACTUAL_OBSERVED_PROVIDER" \
   --arg mod "$ACTUAL_OBSERVED_MODEL" \
+  --arg r_ver "$DECLARED_RUNTIME_VERSION" \
   --arg temp "${TEMPERATURE:-null}" \
   --arg max_tok "${MAX_TOKENS:-null}" \
   --arg u_sha "$STIMULUS_INTENDED_SHA256" \
@@ -572,10 +630,20 @@ TRIAL_JSON="$(jq -c -n \
   --argjson p_fp "$P_FINGERPRINT_MATCH" \
   --argjson p_corr "$P_RESPONSE_CORRELATION" \
   --argjson p_iso "$P_HARNESS_ISOLATION" \
+  --argjson err_is_err "$ERR_IS_ERROR" \
+  --argjson err_is_rl "$ERR_IS_RATE_LIMITED" \
+  --arg err_code "$ERR_CODE" \
+  --arg err_status "$ERR_STATUS" \
+  --arg err_msg "$ERR_MESSAGE" \
+  --arg q_metric "$ERR_QUOTA_METRIC" \
+  --arg q_id "$ERR_QUOTA_ID" \
+  --arg q_val "$ERR_QUOTA_VALUE" \
+  --arg r_delay "$ERR_RETRY_DELAY" \
   '{
     sut: {
       provider: $prov,
       model_id: $mod,
+      declared_runtime_version: $r_ver,
       temperature: (if $temp == "null" then null else ($temp | tonumber? // null) end),
       max_tokens: (if $max_tok == "null" then null else ($max_tok | tonumber? // null) end)
     },
@@ -605,6 +673,17 @@ TRIAL_JSON="$(jq -c -n \
         P_external_concurrency: "NOT_OBSERVED (Requires OS tracing)"
       }
     },
+    error_diagnostics: {
+      is_error: $err_is_err,
+      is_rate_limited: $err_is_rl,
+      error_code: (if $err_code == "null" or $err_code == "" then null else ($err_code | tonumber? // $err_code) end),
+      error_status: (if $err_status == "null" or $err_status == "" then null else $err_status end),
+      error_message: (if $err_msg == "null" or $err_msg == "" then null else $err_msg end),
+      quota_metric: (if $q_metric == "null" or $q_metric == "" then null else $q_metric end),
+      quota_id: (if $q_id == "null" or $q_id == "" then null else $q_id end),
+      quota_value: (if $q_val == "null" or $q_val == "" then null else $q_val end),
+      retry_delay: (if $r_delay == "null" or $r_delay == "" then null else $r_delay end)
+    },
     evaluation: {
       output_provenance: $out_prov,
       trial_classification: $trial_cls
@@ -615,4 +694,4 @@ printf '%s\n' "$TRIAL_JSON" > "$TRIAL_METADATA_FILE"
 chmod 600 "$TRIAL_METADATA_FILE" 2>/dev/null || true
 
 printf '%s\n' "$TRIAL_JSON"
-exit "$B4L_EXIT_CODE"
+exit "$ADAPTER_FINAL_EXIT_CODE"
